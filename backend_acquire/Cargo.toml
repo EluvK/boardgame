@@ -1,0 +1,31 @@
+[package]
+name = "backend_acquire"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread"] }
+salvo = { version = "0.89.2", features = ["tower-compat"] }
+serde = { version = "1.0", features = ["serde_derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+futures = "0.3"
+tokio-tungstenite = "0.28.0"
+itertools = "0.14.0"
+r2d2 = "0.8.10"
+r2d2_sqlite = { version = "0.32.0", features = ["bundled"] }
+rand = "0.9.2"
+rusqlite = { version = "0.38.0", features = ["bundled", "chrono"] }
+socketioxide = { version = "0.16.1", features = [
+    "extensions",
+    "state",
+    "tracing",
+] }
+thiserror = "2.0.18"
+tower = "0.5.2"
+tower-http = { version = "0.6.2", features = ["cors"] }
+tower-layer = "0.3.3"
+tower-service = "0.3.3"
+uuid = { version = "1.16.0", features = ["v4"] }
