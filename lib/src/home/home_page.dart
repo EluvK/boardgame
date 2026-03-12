@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 
 import '../api/lobby_api.dart';
 import '../models/lobby_models.dart';
+import '../room/room_detail_page.dart';
 import '../utils/device_identity.dart';
 import '../utils/lobby_preferences.dart';
 
@@ -19,6 +21,7 @@ class _HomePageState extends State<HomePage> {
   final _joinRoomCtrl = TextEditingController(text: 'demo');
 
   LobbyApi? _api;
+  Timer? _lobbyRefreshTimer;
 
   bool _connected = false;
   bool _authed = false;
@@ -52,6 +55,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    _lobbyRefreshTimer?.cancel();
     _api?.disconnect();
     _serverCtrl.dispose();
     _userNameCtrl.dispose();
@@ -94,21 +98,18 @@ class _HomePageState extends State<HomePage> {
         throw Exception('Device ID not ready');
       }
 
-      final api = LobbyApi(
-        serverUrl: _serverCtrl.text.trim(),
-      );
+      final api = LobbyApi(serverUrl: _serverCtrl.text.trim());
       await api.connect();
 
       final normalizedName = _effectiveUserName(deviceId);
       await LobbyPreferences.saveServerUrl(_serverCtrl.text.trim());
       await LobbyPreferences.saveUserName(normalizedName);
-      await api.auth(
-        userId: deviceId,
-        name: normalizedName,
-      );
+      await api.auth(userId: deviceId, name: normalizedName);
 
       _api?.disconnect();
       _api = api;
+      _bindLobbyPush(api);
+      _startLobbyAutoRefresh();
 
       setState(() {
         _connected = true;
@@ -121,6 +122,8 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _disconnect() {
+    _lobbyRefreshTimer?.cancel();
+    _lobbyRefreshTimer = null;
     _api?.disconnect();
     setState(() {
       _connected = false;
@@ -144,10 +147,7 @@ class _HomePageState extends State<HomePage> {
       }
 
       final normalizedName = _effectiveUserName(deviceId);
-      await api.auth(
-        userId: deviceId,
-        name: normalizedName,
-      );
+      await api.auth(userId: deviceId, name: normalizedName);
 
       await LobbyPreferences.saveUserName(normalizedName);
 
@@ -179,6 +179,49 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  void _bindLobbyPush(LobbyApi api) {
+    api.setRoomsUpdatedListener((rooms) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _rooms = rooms;
+        _message = 'Lobby updated: ${rooms.length} rooms';
+      });
+    });
+  }
+
+  void _startLobbyAutoRefresh() {
+    _lobbyRefreshTimer?.cancel();
+    _lobbyRefreshTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
+      if (!_connected || _busy) {
+        return;
+      }
+
+      final api = _api;
+      if (api == null) {
+        return;
+      }
+
+      try {
+        final games = await api.listGames();
+        final rooms = await api.listRooms();
+        if (!mounted) {
+          return;
+        }
+
+        setState(() {
+          _games = games;
+          _rooms = rooms;
+          _selectedGameId = _resolveSelectedGame(games, _selectedGameId);
+        });
+      } catch (_) {
+        // Auto refresh should be best-effort and never interrupt user actions.
+      }
+    });
+  }
+
   String? _resolveSelectedGame(List<RegisteredGame> games, String? selected) {
     if (games.isEmpty) {
       return null;
@@ -204,14 +247,13 @@ class _HomePageState extends State<HomePage> {
         throw Exception('Room id is required');
       }
 
-      await api.createRoom(
-        room: roomId,
-        gameId: gameId,
-        autoJoin: _autoJoinOnCreate,
-      );
+      await api.createRoom(room: roomId, gameId: gameId, autoJoin: _autoJoinOnCreate);
       _joinRoomCtrl.text = roomId;
 
       await _refreshGamesAndRooms();
+      if (_autoJoinOnCreate && mounted) {
+        _openRoomDetail(roomId: roomId, gameId: gameId);
+      }
       if (!mounted) {
         return;
       }
@@ -233,10 +275,37 @@ class _HomePageState extends State<HomePage> {
       }
 
       await api.joinRoom(roomId);
+      _openRoomDetail(roomId: roomId);
       setState(() {
         _message = 'Joined room "$roomId"';
       });
     });
+  }
+
+  Future<void> _leaveRoom(String roomId) async {
+    await _runTask(() async {
+      final api = _api;
+      if (api == null || !_connected || !_authed) {
+        throw Exception('Connect and auth first');
+      }
+
+      await api.leaveRoom(roomId);
+      await _refreshGamesAndRooms();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _message = 'Left room "$roomId"';
+      });
+    });
+  }
+
+  void _openRoomDetail({required String roomId, String? gameId}) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => RoomDetailPage(roomId: roomId, gameId: gameId, onLeaveRoom: _leaveRoom),
+      ),
+    );
   }
 
   String _effectiveUserName(String deviceId) {
@@ -255,10 +324,7 @@ class _HomePageState extends State<HomePage> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
-        elevation: 0,
-        title: const Text('Boardgame Web Lobby'),
-      ),
+      appBar: AppBar(elevation: 0, title: const Text('Boardgame Web Lobby')),
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -302,17 +368,11 @@ class _HomePageState extends State<HomePage> {
           children: [
             Text('Server Connection', style: theme.textTheme.titleLarge),
             const SizedBox(height: 4),
-            Text(
-              'Socket path is fixed to /socket.io',
-              style: theme.textTheme.bodySmall,
-            ),
+            Text('Socket path is fixed to /socket.io', style: theme.textTheme.bodySmall),
             const SizedBox(height: 8),
             TextField(
               controller: _serverCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Server URL',
-                hintText: 'http://127.0.0.1:17980',
-              ),
+              decoration: const InputDecoration(labelText: 'Server URL', hintText: 'http://127.0.0.1:17980'),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -324,14 +384,8 @@ class _HomePageState extends State<HomePage> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                ElevatedButton(
-                  onPressed: _busy ? null : _connect,
-                  child: const Text('Connect'),
-                ),
-                OutlinedButton(
-                  onPressed: _busy ? null : _disconnect,
-                  child: const Text('Disconnect'),
-                ),
+                ElevatedButton(onPressed: _busy ? null : _connect, child: const Text('Connect')),
+                OutlinedButton(onPressed: _busy ? null : _disconnect, child: const Text('Disconnect')),
                 OutlinedButton(
                   onPressed: _busy || !_connected ? null : _reauthWithNewName,
                   child: const Text('Update Name'),
@@ -403,6 +457,7 @@ class _HomePageState extends State<HomePage> {
                                 },
                           child: const Text('Join'),
                         ),
+                        onTap: () => _openRoomDetail(roomId: r.id, gameId: r.gameId),
                       ),
                     )
                     .toList(),
@@ -445,20 +500,14 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
             const SizedBox(height: 8),
-            ElevatedButton(
-              onPressed: _busy ? null : _createRoom,
-              child: const Text('Create Room'),
-            ),
+            ElevatedButton(onPressed: _busy ? null : _createRoom, child: const Text('Create Room')),
             const Divider(height: 24),
             TextField(
               controller: _joinRoomCtrl,
               decoration: const InputDecoration(labelText: 'Join Room ID'),
             ),
             const SizedBox(height: 8),
-            OutlinedButton(
-              onPressed: _busy ? null : _joinRoom,
-              child: const Text('Join Room'),
-            ),
+            OutlinedButton(onPressed: _busy ? null : _joinRoom, child: const Text('Join Room')),
           ],
         ),
       ),
@@ -473,10 +522,7 @@ class _HomePageState extends State<HomePage> {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: const Color(0xFFD5E3F7)),
       ),
-      child: Text(
-        _message,
-        style: theme.textTheme.bodyLarge,
-      ),
+      child: Text(_message, style: theme.textTheme.bodyLarge),
     );
   }
 }

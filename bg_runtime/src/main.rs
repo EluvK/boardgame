@@ -10,10 +10,14 @@ async fn main() -> anyhow::Result<()> {
 
     let rm = Arc::new(RoomManager::new());
 
-    // create an acquire demo room
+    // Register acquire game so lobby list/create APIs can discover it.
     let acquire_game = Arc::new(AcquireGame::new());
+    rm.register_game(acquire_game).await;
+    let acquire_game_id = "acquire".to_string();
+
+    // Optional demo room for quick local smoke testing.
     let _ = rm
-        .create_room("acquire_demo".to_string(), acquire_game, None)
+        .create_room_with_game("acquire_demo".to_string(), &acquire_game_id, None)
         .await;
 
     // load default config

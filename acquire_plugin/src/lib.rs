@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use serde_json::Value;
+use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
@@ -105,7 +105,7 @@ impl Game for AcquireGame {
         let s = match any.downcast_mut::<AcquireState>() {
             Some(s) => s,
             None => {
-                return ActionResult::Err(game::GameError::Internal("state type mismatch".into()))
+                return ActionResult::Err(game::GameError::Internal("state type mismatch".into()));
             }
         };
 

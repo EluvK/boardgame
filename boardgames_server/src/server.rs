@@ -25,6 +25,11 @@ pub struct JoinRoomReq {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct GetRoomReq {
+    pub room: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ActionReq {
     pub room: String,
     pub action: Action,
@@ -36,6 +41,11 @@ pub struct CreateRoomReq {
     pub game_id: String,
     pub opts: Option<Value>,
     pub auto_join: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CloseRoomReq {
+    pub room: String,
 }
 
 /// Server-side state stored in socket.io State<T>
@@ -57,6 +67,36 @@ impl ServerState {
 pub type StateRef = Arc<Mutex<ServerState>>;
 
 const HEALTH_OK: &str = "ok";
+const LOBBY_CHANNEL: &str = "__lobby__";
+
+struct SocketReqLog {
+    event: &'static str,
+    socket_id: String,
+}
+
+impl SocketReqLog {
+    fn new(event: &'static str, socket: &SocketRef) -> Self {
+        let socket_id = socket.id.to_string();
+        info!(
+            ns = "socket.io",
+            event = event,
+            socket_id = %socket_id,
+            "request.start"
+        );
+        Self { event, socket_id }
+    }
+}
+
+impl Drop for SocketReqLog {
+    fn drop(&mut self) {
+        info!(
+            ns = "socket.io",
+            event = self.event,
+            socket_id = %self.socket_id,
+            "request.end"
+        );
+    }
+}
 
 #[allow(unused_braces)]
 #[salvo::handler]
@@ -96,7 +136,10 @@ pub async fn run_server(
     let log_config = crate::logs::LogConfig::default();
     let _g = crate::logs::enable_log(&log_config)?;
 
-    info!("starting server_with_acquire on {}:{}", config.host, config.port);
+    info!(
+        "starting server_with_acquire on {}:{}",
+        config.host, config.port
+    );
     // health handler is defined in this module
     let state = Arc::new(Mutex::new(ServerState::new(room_manager)));
 
@@ -115,8 +158,20 @@ pub async fn run_server(
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
         loop {
             interval.tick().await;
-            let _guard = _state_clone.lock().await;
-            // TODO: periodic maintenance, cleanup stale sessions, metrics
+            let rm = {
+                let guard = _state_clone.lock().await;
+                guard.room_manager.clone()
+            };
+
+            let reclaimed = rm.reclaim_empty_rooms().await;
+            if !reclaimed.is_empty() {
+                info!(
+                    ns = "socket.io",
+                    reclaimed = ?reclaimed,
+                    count = reclaimed.len(),
+                    "rooms reclaimed"
+                );
+            }
         }
     });
 
@@ -137,12 +192,17 @@ pub async fn run_server(
 }
 
 pub async fn handle_on_connect(_io: SocketIo, socket: SocketRef, _state: State<StateRef>) {
+    let _req_log = SocketReqLog::new("connect", &socket);
     info!(ns = "socket.io", ?socket.id, "client connected");
+    // All clients join lobby channel to receive global room list updates.
+    socket.join(LOBBY_CHANNEL);
 
     socket.on("auth", socket_on_auth);
     socket.on("list_games", socket_on_list_games);
     socket.on("list_rooms", socket_on_list_rooms);
+    socket.on("get_room", socket_on_get_room);
     socket.on("create_room", socket_on_create_room);
+    socket.on("close_room", socket_on_close_room);
     socket.on("join_room", socket_on_join_room);
     socket.on("leave_room", socket_on_leave_room);
     socket.on("action", socket_on_action);
@@ -150,6 +210,7 @@ pub async fn handle_on_connect(_io: SocketIo, socket: SocketRef, _state: State<S
 }
 
 async fn socket_on_list_games(socket: SocketRef, state: State<StateRef>) {
+    let _req_log = SocketReqLog::new("list_games", &socket);
     let rm = state.lock().await.room_manager.clone();
     let games = rm.list_games().await;
     socket
@@ -161,6 +222,7 @@ async fn socket_on_list_games(socket: SocketRef, state: State<StateRef>) {
 }
 
 async fn socket_on_list_rooms(socket: SocketRef, state: State<StateRef>) {
+    let _req_log = SocketReqLog::new("list_rooms", &socket);
     let rm = state.lock().await.room_manager.clone();
     let rooms = rm.list_rooms().await;
     socket
@@ -171,11 +233,28 @@ async fn socket_on_list_rooms(socket: SocketRef, state: State<StateRef>) {
         .ok();
 }
 
+async fn socket_on_get_room(
+    socket: SocketRef,
+    state: State<StateRef>,
+    Data::<GetRoomReq>(req): Data<GetRoomReq>,
+) {
+    let _req_log = SocketReqLog::new("get_room", &socket);
+    let rm = state.lock().await.room_manager.clone();
+    let room = rm.room_summary(&req.room).await;
+    socket
+        .emit(
+            "get_room_result",
+            &serde_json::json!({"ok": room.is_some(), "room": room, "err": if room.is_none() { Some("room_not_found") } else { None::<&str> }}),
+        )
+        .ok();
+}
+
 async fn socket_on_create_room(
     socket: SocketRef,
     state: State<StateRef>,
     Data::<CreateRoomReq>(req): Data<CreateRoomReq>,
 ) {
+    let _req_log = SocketReqLog::new("create_room", &socket);
     let user = {
         let guard = state.lock().await;
         guard
@@ -192,6 +271,17 @@ async fn socket_on_create_room(
     }
 
     let rm = state.lock().await.room_manager.clone();
+    let uid = user.unwrap();
+
+    if let Some(current_room) = rm.find_user_room(&uid).await {
+        socket
+            .emit(
+                "create_room_result",
+                &serde_json::json!({"ok": false, "err": "user_already_in_room", "current_room": current_room}),
+            )
+            .ok();
+        return;
+    }
 
     if rm.get_room(&req.room).await.is_some() {
         socket
@@ -220,7 +310,6 @@ async fn socket_on_create_room(
         Ok(room) => {
             let should_auto_join = req.auto_join.unwrap_or(true);
             if should_auto_join {
-                let uid = user.unwrap();
                 socket.join(req.room.clone());
                 let res = room.join(uid).await;
                 if let ActionResult::Ok { broadcasts, .. } = res {
@@ -228,10 +317,13 @@ async fn socket_on_create_room(
                 }
             }
 
+            let room_summary = rm.room_summary(&req.room).await;
+            emit_rooms_updated_to_lobby(&socket, &state).await;
+
             socket
                 .emit(
                     "create_room_result",
-                    &serde_json::json!({"ok": true, "room": req.room, "game_id": req.game_id}),
+                    &serde_json::json!({"ok": true, "room": req.room, "game_id": req.game_id, "summary": room_summary}),
                 )
                 .ok();
         }
@@ -246,11 +338,69 @@ async fn socket_on_create_room(
     }
 }
 
+async fn socket_on_close_room(
+    socket: SocketRef,
+    state: State<StateRef>,
+    Data::<CloseRoomReq>(req): Data<CloseRoomReq>,
+) {
+    let _req_log = SocketReqLog::new("close_room", &socket);
+    let user = {
+        let guard = state.lock().await;
+        guard
+            .users
+            .get(socket.id.as_str())
+            .map(|(_, uid)| uid.clone())
+    };
+
+    if user.is_none() {
+        socket
+            .emit("error", &serde_json::json!({"err":"unauthenticated"}))
+            .ok();
+        return;
+    }
+
+    let rm = state.lock().await.room_manager.clone();
+    let room = rm.get_room(&req.room).await;
+    let room = match room {
+        Some(room) => room,
+        None => {
+            socket
+                .emit(
+                    "close_room_result",
+                    &serde_json::json!({"ok": false, "err": "room_not_found"}),
+                )
+                .ok();
+            return;
+        }
+    };
+
+    let user_id = user.unwrap();
+    if !room.has_user(&user_id).await {
+        socket
+            .emit(
+                "close_room_result",
+                &serde_json::json!({"ok": false, "err": "not_in_room"}),
+            )
+            .ok();
+        return;
+    }
+
+    rm.remove_room(&req.room).await;
+    emit_rooms_updated_to_lobby(&socket, &state).await;
+    socket
+        .emit(
+            "close_room_result",
+            &serde_json::json!({"ok": true, "room": req.room}),
+        )
+        .ok();
+}
+
 async fn socket_on_auth(
     socket: SocketRef,
     state: State<StateRef>,
     Data::<UserInfo>(user): Data<UserInfo>,
 ) {
+    let _req_log = SocketReqLog::new("auth", &socket);
     let mut s = state.lock().await;
     s.users
         .insert(socket.id.to_string(), (socket.clone(), user.id.clone()));
@@ -261,8 +411,26 @@ async fn socket_on_auth(
 }
 
 async fn socket_on_disconnect(socket: SocketRef, state: State<StateRef>) {
-    let mut s = state.lock().await;
-    s.users.remove(socket.id.as_str());
+    let _req_log = SocketReqLog::new("disconnect", &socket);
+    let (uid, rm) = {
+        let mut s = state.lock().await;
+        let uid = s.users.remove(socket.id.as_str()).map(|(_, uid)| uid);
+        (uid, s.room_manager.clone())
+    };
+
+    if let Some(uid) = uid {
+        let emptied = rm.leave_all_rooms_for_user(&uid).await;
+        if !emptied.is_empty() {
+            info!(
+                ns = "socket.io",
+                user_id = %uid,
+                emptied = ?emptied,
+                "rooms auto-cleaned on disconnect"
+            );
+            emit_rooms_updated_to_lobby(&socket, &state).await;
+        }
+    }
+
     info!(ns = "socket.io", ?socket.id, "disconnected");
 }
 
@@ -271,6 +439,7 @@ async fn socket_on_join_room(
     state: State<StateRef>,
     Data::<JoinRoomReq>(req): Data<JoinRoomReq>,
 ) {
+    let _req_log = SocketReqLog::new("join_room", &socket);
     let user = {
         let guard = state.lock().await;
         guard
@@ -290,6 +459,29 @@ async fn socket_on_join_room(
     };
 
     let room_manager = state.lock().await.room_manager.clone();
+
+    if let Some(current_room) = room_manager.find_user_room(&user).await {
+        if current_room != req.room {
+            socket
+                .emit(
+                    "joined",
+                    &serde_json::json!({"ok": false, "err": "user_already_in_room", "current_room": current_room}),
+                )
+                .ok();
+            return;
+        }
+
+        if let Some(current) = room_manager.room_summary(&req.room).await {
+            socket
+                .emit(
+                    "joined",
+                    &serde_json::json!({"ok": true, "room": req.room, "summary": current, "already_in_room": true}),
+                )
+                .ok();
+            return;
+        }
+    }
+
     match room_manager.get_room(&req.room).await {
         Some(room) => {
             // join the socket.io room
@@ -298,12 +490,14 @@ async fn socket_on_join_room(
             let res = room.join(user.clone()).await;
             match res {
                 ActionResult::Ok { broadcasts, .. } => {
+                    let room_summary = room.summary().await;
                     // emit a joined ack
                     socket
-                        .emit("joined", &serde_json::json!({"room": req.room}))
+                        .emit("joined", &serde_json::json!({"ok": true, "room": req.room, "summary": room_summary}))
                         .ok();
                     // dispatch broadcasts
                     dispatch_broadcasts(&socket, &state, &req.room, broadcasts).await;
+                    emit_rooms_updated_to_lobby(&socket, &state).await;
                 }
                 ActionResult::Err(e) => {
                     socket
@@ -328,6 +522,7 @@ async fn socket_on_leave_room(
     state: State<StateRef>,
     Data::<JoinRoomReq>(req): Data<JoinRoomReq>,
 ) {
+    let _req_log = SocketReqLog::new("leave_room", &socket);
     let user = {
         let guard = state.lock().await;
         guard
@@ -346,10 +541,25 @@ async fn socket_on_leave_room(
     let user = user.unwrap();
     let rm = state.lock().await.room_manager.clone();
     if let Some(room) = rm.get_room(&req.room).await {
-        let _ = room.leave(&user).await;
+        let res = room.leave(&user).await;
         socket.leave(req.room.clone());
+
+        let room_empty = room.is_empty().await;
+        if room_empty {
+            rm.remove_room(&req.room).await;
+        }
+
+        if let ActionResult::Ok { broadcasts, .. } = res {
+            dispatch_broadcasts(&socket, &state, &req.room, broadcasts).await;
+        }
+
+        emit_rooms_updated_to_lobby(&socket, &state).await;
+
         socket
-            .emit("left", &serde_json::json!({"room": req.room}))
+            .emit(
+                "left",
+                &serde_json::json!({"ok": true, "room": req.room, "closed": room_empty}),
+            )
             .ok();
     } else {
         socket
@@ -358,11 +568,25 @@ async fn socket_on_leave_room(
     }
 }
 
+async fn emit_rooms_updated_to_lobby(socket: &SocketRef, state: &State<StateRef>) {
+    let rm = state.lock().await.room_manager.clone();
+    let rooms = rm.list_rooms().await;
+    let payload = serde_json::json!({"rooms": rooms});
+
+    socket.emit("rooms_updated", &payload).ok();
+    socket
+        .to(LOBBY_CHANNEL.to_string())
+        .emit("rooms_updated", &payload)
+        .await
+        .ok();
+}
+
 async fn socket_on_action(
     socket: SocketRef,
     state: State<StateRef>,
     Data::<ActionReq>(req): Data<ActionReq>,
 ) {
+    let _req_log = SocketReqLog::new("action", &socket);
     let user = {
         let guard = state.lock().await;
         guard

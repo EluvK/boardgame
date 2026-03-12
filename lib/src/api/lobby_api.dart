@@ -5,14 +5,13 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 import '../models/lobby_models.dart';
 
 class LobbyApi {
-  LobbyApi({
-    required this.serverUrl,
-  });
+  LobbyApi({required this.serverUrl});
 
   final String serverUrl;
   static const String _socketPath = '/socket.io';
 
   io.Socket? _socket;
+  void Function(dynamic data)? _roomsUpdatedRawHandler;
 
   bool get isConnected => _socket?.connected ?? false;
 
@@ -67,28 +66,48 @@ class LobbyApi {
   }
 
   void disconnect() {
+    setRoomsUpdatedListener(null);
     _socket?.disconnect();
     _socket?.dispose();
     _socket = null;
   }
 
+  void setRoomsUpdatedListener(void Function(List<RoomSummary> rooms)? listener) {
+    final socket = _socket;
+    final old = _roomsUpdatedRawHandler;
+    if (socket != null && old != null) {
+      socket.off('rooms_updated', old);
+    }
+    _roomsUpdatedRawHandler = null;
+
+    if (socket == null || listener == null) {
+      return;
+    }
+
+    void onRoomsUpdated(dynamic data) {
+      final map = _asMap(data);
+      final rawRooms = (map['rooms'] as List<dynamic>? ?? <dynamic>[])
+          .whereType<Map<dynamic, dynamic>>()
+          .map((e) => e.map((k, v) => MapEntry(k.toString(), v)))
+          .toList();
+
+      listener(rawRooms.map(RoomSummary.fromJson).toList());
+    }
+
+    _roomsUpdatedRawHandler = onRoomsUpdated;
+    socket.on('rooms_updated', onRoomsUpdated);
+  }
+
   Future<void> auth({required String userId, String? name}) async {
     await _emitAndWait(
       emitEvent: 'auth',
-      payload: {
-        'id': userId,
-        'name': (name?.trim().isEmpty ?? true) ? null : name,
-      },
+      payload: {'id': userId, 'name': (name?.trim().isEmpty ?? true) ? null : name},
       responseEvent: 'auth_ok',
     );
   }
 
   Future<List<RegisteredGame>> listGames() async {
-    final res = await _emitAndWait(
-      emitEvent: 'list_games',
-      payload: null,
-      responseEvent: 'list_games_result',
-    );
+    final res = await _emitAndWait(emitEvent: 'list_games', payload: null, responseEvent: 'list_games_result');
 
     final rawGames = (res['games'] as List<dynamic>? ?? <dynamic>[])
         .whereType<Map<dynamic, dynamic>>()
@@ -99,11 +118,7 @@ class LobbyApi {
   }
 
   Future<List<RoomSummary>> listRooms() async {
-    final res = await _emitAndWait(
-      emitEvent: 'list_rooms',
-      payload: null,
-      responseEvent: 'list_rooms_result',
-    );
+    final res = await _emitAndWait(emitEvent: 'list_rooms', payload: null, responseEvent: 'list_rooms_result');
 
     final rawRooms = (res['rooms'] as List<dynamic>? ?? <dynamic>[])
         .whereType<Map<dynamic, dynamic>>()
@@ -113,19 +128,10 @@ class LobbyApi {
     return rawRooms.map(RoomSummary.fromJson).toList();
   }
 
-  Future<void> createRoom({
-    required String room,
-    required String gameId,
-    bool autoJoin = true,
-  }) async {
+  Future<void> createRoom({required String room, required String gameId, bool autoJoin = true}) async {
     final res = await _emitAndWait(
       emitEvent: 'create_room',
-      payload: {
-        'room': room,
-        'game_id': gameId,
-        'opts': null,
-        'auto_join': autoJoin,
-      },
+      payload: {'room': room, 'game_id': gameId, 'opts': null, 'auto_join': autoJoin},
       responseEvent: 'create_room_result',
     );
 
@@ -136,11 +142,15 @@ class LobbyApi {
   }
 
   Future<void> joinRoom(String roomId) async {
-    await _emitAndWait(
-      emitEvent: 'join_room',
-      payload: {'room': roomId},
-      responseEvent: 'joined',
-    );
+    await _emitAndWait(emitEvent: 'join_room', payload: {'room': roomId}, responseEvent: 'joined');
+  }
+
+  Future<void> leaveRoom(String roomId) async {
+    final res = await _emitAndWait(emitEvent: 'leave_room', payload: {'room': roomId}, responseEvent: 'left');
+    final ok = res['ok'] == true;
+    if (!ok) {
+      throw Exception(res['err']?.toString() ?? 'leave_room_failed');
+    }
   }
 
   Future<Map<String, dynamic>> _emitAndWait({

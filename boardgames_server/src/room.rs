@@ -3,9 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::game::{
-    Action, ActionCtx, ActionResult, Game, GameId, GameState, RoomId, UserId,
-};
+use crate::game::{Action, ActionCtx, ActionResult, Game, GameId, GameState, RoomId, UserId};
 
 /// A Room holds a single game instance and its mutable state plus list of players.
 pub struct Room {
@@ -97,6 +95,22 @@ impl Room {
 
     pub async fn player_count(&self) -> usize {
         self.users.lock().await.len()
+    }
+
+    pub async fn has_user(&self, user: &UserId) -> bool {
+        self.users.lock().await.contains(user)
+    }
+
+    pub async fn is_empty(&self) -> bool {
+        self.users.lock().await.is_empty()
+    }
+
+    pub async fn summary(&self) -> RoomSummary {
+        RoomSummary {
+            id: self.id.clone(),
+            game_id: self.game.descriptor().id.clone(),
+            player_count: self.player_count().await,
+        }
     }
 }
 
@@ -195,6 +209,74 @@ impl RoomManager {
             });
         }
         out
+    }
+
+    pub async fn room_summary(&self, id: &RoomId) -> Option<RoomSummary> {
+        let room = self.get_room(id).await?;
+        Some(room.summary().await)
+    }
+
+    pub async fn leave_all_rooms_for_user(&self, user: &UserId) -> Vec<RoomId> {
+        let rooms: Vec<(RoomId, Arc<Room>)> = {
+            let guard = self.inner.lock().await;
+            guard
+                .iter()
+                .map(|(id, room)| (id.clone(), room.clone()))
+                .collect()
+        };
+
+        let mut emptied_rooms = Vec::new();
+        for (room_id, room) in rooms {
+            if !room.has_user(user).await {
+                continue;
+            }
+
+            let _ = room.leave(user).await;
+            if room.is_empty().await {
+                self.remove_room(&room_id).await;
+                emptied_rooms.push(room_id);
+            }
+        }
+
+        emptied_rooms
+    }
+
+    pub async fn find_user_room(&self, user: &UserId) -> Option<RoomId> {
+        let rooms: Vec<(RoomId, Arc<Room>)> = {
+            let guard = self.inner.lock().await;
+            guard
+                .iter()
+                .map(|(id, room)| (id.clone(), room.clone()))
+                .collect()
+        };
+
+        for (room_id, room) in rooms {
+            if room.has_user(user).await {
+                return Some(room_id);
+            }
+        }
+
+        None
+    }
+
+    pub async fn reclaim_empty_rooms(&self) -> Vec<RoomId> {
+        let rooms: Vec<(RoomId, Arc<Room>)> = {
+            let guard = self.inner.lock().await;
+            guard
+                .iter()
+                .map(|(id, room)| (id.clone(), room.clone()))
+                .collect()
+        };
+
+        let mut reclaimed = Vec::new();
+        for (room_id, room) in rooms {
+            if room.is_empty().await {
+                self.remove_room(&room_id).await;
+                reclaimed.push(room_id);
+            }
+        }
+
+        reclaimed
     }
 
     /// Apply action in a room and return the ActionResult for the caller to dispatch broadcasts.
