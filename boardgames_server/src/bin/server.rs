@@ -103,6 +103,7 @@ async fn main() -> anyhow::Result<()> {
             version: "0.1".into(),
         },
     });
+    rm.register_game(demo_game.clone()).await;
     let _ = rm.create_room("demo".to_string(), demo_game, None).await;
 
     // demo room(s) can be created by an external launcher that depends on both

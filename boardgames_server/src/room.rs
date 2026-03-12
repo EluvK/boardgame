@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::game::{
-    self, Action, ActionCtx, ActionResult, Game, GameState, Outbound, RoomId, UserId,
+    Action, ActionCtx, ActionResult, Game, GameId, GameState, RoomId, UserId,
 };
 
 /// A Room holds a single game instance and its mutable state plus list of players.
@@ -13,6 +13,22 @@ pub struct Room {
     pub game: Arc<dyn Game>,
     state: Mutex<Box<dyn GameState>>,
     users: Mutex<HashSet<UserId>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RegisteredGame {
+    pub id: GameId,
+    pub name: String,
+    pub min_players: usize,
+    pub max_players: usize,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RoomSummary {
+    pub id: RoomId,
+    pub game_id: GameId,
+    pub player_count: usize,
 }
 
 impl Room {
@@ -78,19 +94,66 @@ impl Room {
         let state_guard = self.state.lock().await;
         state_guard.snapshot()
     }
+
+    pub async fn player_count(&self) -> usize {
+        self.users.lock().await.len()
+    }
 }
 
 /// Manager for rooms. Lightweight registry to create/find rooms.
 #[derive(Default, Clone)]
 pub struct RoomManager {
     inner: Arc<Mutex<HashMap<RoomId, Arc<Room>>>>,
+    games: Arc<Mutex<HashMap<GameId, Arc<dyn Game>>>>,
 }
 
 impl RoomManager {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
+            games: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub async fn register_game(&self, game: Arc<dyn Game>) {
+        let game_id = game.descriptor().id.clone();
+        self.games.lock().await.insert(game_id, game);
+    }
+
+    pub async fn list_games(&self) -> Vec<RegisteredGame> {
+        let guard = self.games.lock().await;
+        guard
+            .values()
+            .map(|g| {
+                let d = g.descriptor();
+                RegisteredGame {
+                    id: d.id.clone(),
+                    name: d.name.clone(),
+                    min_players: d.min_players,
+                    max_players: d.max_players,
+                    version: d.version.clone(),
+                }
+            })
+            .collect()
+    }
+
+    pub async fn has_game(&self, game_id: &GameId) -> bool {
+        self.games.lock().await.contains_key(game_id)
+    }
+
+    pub async fn create_room_with_game(
+        &self,
+        id: RoomId,
+        game_id: &GameId,
+        opts: Option<Value>,
+    ) -> anyhow::Result<Arc<Room>> {
+        let game = {
+            let guard = self.games.lock().await;
+            guard.get(game_id).cloned()
+        }
+        .ok_or_else(|| anyhow::anyhow!("game not registered: {}", game_id))?;
+
+        self.create_room(id, game, opts).await
     }
 
     pub async fn create_room(
@@ -110,6 +173,28 @@ impl RoomManager {
 
     pub async fn remove_room(&self, id: &RoomId) {
         self.inner.lock().await.remove(id);
+    }
+
+    pub async fn list_rooms(&self) -> Vec<RoomSummary> {
+        let rooms: Vec<(RoomId, Arc<Room>)> = {
+            let guard = self.inner.lock().await;
+            guard
+                .iter()
+                .map(|(id, room)| (id.clone(), room.clone()))
+                .collect()
+        };
+
+        let mut out = Vec::with_capacity(rooms.len());
+        for (id, room) in rooms {
+            let game_id = room.game.descriptor().id.clone();
+            let player_count = room.player_count().await;
+            out.push(RoomSummary {
+                id,
+                game_id,
+                player_count,
+            });
+        }
+        out
     }
 
     /// Apply action in a room and return the ActionResult for the caller to dispatch broadcasts.

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use socketioxide::{
     SocketIo,
     extract::{Data, SocketRef, State},
@@ -27,6 +28,14 @@ pub struct JoinRoomReq {
 pub struct ActionReq {
     pub room: String,
     pub action: Action,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateRoomReq {
+    pub room: String,
+    pub game_id: String,
+    pub opts: Option<Value>,
+    pub auto_join: Option<bool>,
 }
 
 /// Server-side state stored in socket.io State<T>
@@ -84,7 +93,10 @@ pub async fn run_server(
     use salvo::{Listener, Router, Server, conn::TcpListener, prelude::TowerLayerCompat};
     use socketioxide::SocketIo;
     use tracing::info;
+    let log_config = crate::logs::LogConfig::default();
+    let _g = crate::logs::enable_log(&log_config)?;
 
+    info!("starting server_with_acquire on {}:{}", config.host, config.port);
     // health handler is defined in this module
     let state = Arc::new(Mutex::new(ServerState::new(room_manager)));
 
@@ -128,10 +140,110 @@ pub async fn handle_on_connect(_io: SocketIo, socket: SocketRef, _state: State<S
     info!(ns = "socket.io", ?socket.id, "client connected");
 
     socket.on("auth", socket_on_auth);
-    socket.on_disconnect(socket_on_disconnect);
+    socket.on("list_games", socket_on_list_games);
+    socket.on("list_rooms", socket_on_list_rooms);
+    socket.on("create_room", socket_on_create_room);
     socket.on("join_room", socket_on_join_room);
     socket.on("leave_room", socket_on_leave_room);
     socket.on("action", socket_on_action);
+    socket.on_disconnect(socket_on_disconnect);
+}
+
+async fn socket_on_list_games(socket: SocketRef, state: State<StateRef>) {
+    let rm = state.lock().await.room_manager.clone();
+    let games = rm.list_games().await;
+    socket
+        .emit(
+            "list_games_result",
+            &serde_json::json!({"ok": true, "games": games}),
+        )
+        .ok();
+}
+
+async fn socket_on_list_rooms(socket: SocketRef, state: State<StateRef>) {
+    let rm = state.lock().await.room_manager.clone();
+    let rooms = rm.list_rooms().await;
+    socket
+        .emit(
+            "list_rooms_result",
+            &serde_json::json!({"ok": true, "rooms": rooms}),
+        )
+        .ok();
+}
+
+async fn socket_on_create_room(
+    socket: SocketRef,
+    state: State<StateRef>,
+    Data::<CreateRoomReq>(req): Data<CreateRoomReq>,
+) {
+    let user = {
+        let guard = state.lock().await;
+        guard
+            .users
+            .get(socket.id.as_str())
+            .map(|(_, uid)| uid.clone())
+    };
+
+    if user.is_none() {
+        socket
+            .emit("error", &serde_json::json!({"err":"unauthenticated"}))
+            .ok();
+        return;
+    }
+
+    let rm = state.lock().await.room_manager.clone();
+
+    if rm.get_room(&req.room).await.is_some() {
+        socket
+            .emit(
+                "create_room_result",
+                &serde_json::json!({"ok": false, "err": "room_already_exists"}),
+            )
+            .ok();
+        return;
+    }
+
+    if !rm.has_game(&req.game_id).await {
+        socket
+            .emit(
+                "create_room_result",
+                &serde_json::json!({"ok": false, "err": "game_not_registered", "game_id": req.game_id}),
+            )
+            .ok();
+        return;
+    }
+
+    match rm
+        .create_room_with_game(req.room.clone(), &req.game_id, req.opts.clone())
+        .await
+    {
+        Ok(room) => {
+            let should_auto_join = req.auto_join.unwrap_or(true);
+            if should_auto_join {
+                let uid = user.unwrap();
+                socket.join(req.room.clone());
+                let res = room.join(uid).await;
+                if let ActionResult::Ok { broadcasts, .. } = res {
+                    dispatch_broadcasts(&socket, &state, &req.room, broadcasts).await;
+                }
+            }
+
+            socket
+                .emit(
+                    "create_room_result",
+                    &serde_json::json!({"ok": true, "room": req.room, "game_id": req.game_id}),
+                )
+                .ok();
+        }
+        Err(e) => {
+            socket
+                .emit(
+                    "create_room_result",
+                    &serde_json::json!({"ok": false, "err": format!("{}", e)}),
+                )
+                .ok();
+        }
+    }
 }
 
 async fn socket_on_auth(
