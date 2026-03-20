@@ -404,7 +404,11 @@ async fn socket_on_auth(
     let mut s = state.lock().await;
     s.users
         .insert(socket.id.to_string(), (socket.clone(), user.id.clone()));
-    info!(ns = "socket.io", ?socket.id, "auth ok for {}", user.id);
+    info!(
+        "auth ok for {}, name {}",
+        user.id,
+        user.name.unwrap_or("N/A".to_string())
+    );
     socket
         .emit("auth_ok", &serde_json::json!({"ok": true}))
         .ok();
@@ -670,8 +674,40 @@ async fn dispatch_broadcasts(
                     sref.emit("message", &b.payload).ok();
                 }
             }
-            OutboundTarget::Others(_) => { /* not implemented yet */ }
-            OutboundTarget::Session(_) => { /* not implemented yet */ }
+            OutboundTarget::Others(excluded_users) => {
+                let (entries, rm) = {
+                    let guard = state.lock().await;
+                    let entries: Vec<(SocketRef, String)> = guard
+                        .users
+                        .values()
+                        .map(|(socket_ref, uid)| (socket_ref.clone(), uid.clone()))
+                        .collect();
+                    (entries, guard.room_manager.clone())
+                };
+
+                if let Some(target_room) = rm.get_room(&room.to_string()).await {
+                    for (sref, uid) in entries {
+                        if excluded_users.iter().any(|u| u == &uid) {
+                            continue;
+                        }
+                        if target_room.has_user(&uid).await {
+                            sref.emit("message", &b.payload).ok();
+                        }
+                    }
+                }
+            }
+            OutboundTarget::Session(session_id) => {
+                let found = {
+                    let guard = state.lock().await;
+                    guard
+                        .users
+                        .get(&session_id)
+                        .map(|(socket_ref, _)| socket_ref.clone())
+                };
+                if let Some(sref) = found {
+                    sref.emit("message", &b.payload).ok();
+                }
+            }
         }
     }
 }
