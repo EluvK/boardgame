@@ -1,5 +1,11 @@
 # Acquire 服务端问题清单与交接纪要（2026-03-20）
 
+> 文档状态：历史归档（只读）。
+>
+> 日常开发请优先维护以下文档：
+> - .github/guides/acquire-rulebook.zh-CN.md
+> - .github/guides/acquire-implementation-checklist.zh-CN.md
+
 本文件用于跨会话交接，包含：
 - 当前实现状态（已完成）
 - 与规则书对照后发现的问题（待修）
