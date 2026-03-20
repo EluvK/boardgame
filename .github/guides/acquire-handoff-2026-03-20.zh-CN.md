@@ -9,9 +9,18 @@
 关联文件：
 - 规则书：.github/guides/acquire-rulebook.zh-CN.md
 - 实现清单：.github/guides/acquire-implementation-checklist.zh-CN.md
-- 服务端实现：acquire_plugin/src/lib.rs
+- 服务端实现：
+	- acquire_plugin/src/lib.rs（模块入口与导出）
+	- acquire_plugin/src/model.rs（状态结构）
+	- acquire_plugin/src/engine.rs（规则与动作处理）
+	- acquire_plugin/src/tests.rs（回归测试）
 
 ## 1. 当前已完成（服务端）
+
+0. 代码结构重构（本次已完成）
+- 已将原先单文件实现拆分为 constants/model/engine/tests 四个模块。
+- 对外 API 保持不变：仍通过 AcquireGame 作为插件入口。
+- 已验证重构后行为一致，测试通过。
 
 1. 游戏主流程最小闭环
 - 已支持阶段：place / choose_company / resolve_merge / merge_stock_decision / buy / game_over。
@@ -104,8 +113,8 @@
 ## 5. 快速恢复上下文（下次开工可直接用）
 
 1. 先运行：cargo test -p acquire_plugin
-2. 关键入口：acquire_plugin/src/lib.rs 的 handle_action
-3. 关键状态：AcquireState（companies / tile_company / independent_tiles / merge_settlement / phase / tile_bag / player_tiles）
+2. 关键入口：acquire_plugin/src/lib.rs（对外入口） + acquire_plugin/src/engine.rs 的 handle_action
+3. 关键状态：acquire_plugin/src/model.rs 中 AcquireState（companies / tile_company / independent_tiles / merge_settlement / phase / tile_bag / player_tiles）
 4. 参考文档：
 - .github/guides/acquire-rulebook.zh-CN.md
 - .github/guides/acquire-implementation-checklist.zh-CN.md

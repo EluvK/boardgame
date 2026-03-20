@@ -4,11 +4,15 @@
 
 关联文档：
 - 规则说明书：.github/guides/acquire-rulebook.zh-CN.md
-- 当前实现：acquire_plugin/src/lib.rs
+- 当前实现：
+  - acquire_plugin/src/lib.rs（模块入口与导出）
+  - acquire_plugin/src/model.rs（状态结构定义）
+  - acquire_plugin/src/engine.rs（规则与动作处理）
+  - acquire_plugin/src/tests.rs（回归测试）
 
 ## 1. 状态模型（State）
 
-当前结构体：AcquireState（acquire_plugin/src/lib.rs）
+当前结构体：AcquireState（acquire_plugin/src/model.rs）
 
 - [x] tiles: 已放置坐标集合
 - [x] moves: 历史落子（user_id, pos）
@@ -181,3 +185,9 @@
 - M2: 完成开局规则（先手/初始流程）对齐。
 - M3: 完成事件拆分并与客户端约定字段。
 - M4: 完成快照恢复与长局补牌回归测试。
+
+## 9. 本次收尾状态（2026-03-20）
+
+- [x] 并购插件单文件已拆分为模块化结构（lib/model/engine/tests）。
+- [x] 重构后回归测试通过（acquire_plugin: 18 passed / 0 failed）。
+- [x] 交接文档已同步到模块化路径。
