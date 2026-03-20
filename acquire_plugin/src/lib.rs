@@ -83,6 +83,8 @@ pub struct AcquireState {
     pub players: HashMap<String, i64>,
     pub shares: HashMap<String, HashMap<String, i64>>,
     pub stock_pool: HashMap<String, i64>,
+    pub tile_bag: VecDeque<String>,
+    pub player_tiles: HashMap<String, HashSet<String>>,
     pub independent_tiles: HashSet<String>,
     pub tile_company: HashMap<String, String>,
     pub companies: HashMap<String, CompanyState>,
@@ -110,6 +112,8 @@ impl AcquireState {
             players: HashMap::new(),
             shares: HashMap::new(),
             stock_pool,
+            tile_bag: Self::build_tile_bag(),
+            player_tiles: HashMap::new(),
             independent_tiles: HashSet::new(),
             tile_company: HashMap::new(),
             companies: HashMap::new(),
@@ -122,6 +126,48 @@ impl AcquireState {
             current_turn: 0,
             phase: "place".to_string(),
             turn_no: 1,
+        }
+    }
+
+    fn build_tile_bag() -> VecDeque<String> {
+        let mut bag = VecDeque::new();
+        for col in 1..=BOARD_MAX_COL {
+            for row in 1..=BOARD_MAX_ROW {
+                bag.push_back(Self::encode_pos(col, row));
+            }
+        }
+        bag
+    }
+
+    fn tile_in_any_hand(&self, pos: &str) -> bool {
+        self.player_tiles.values().any(|hand| hand.contains(pos))
+    }
+
+    fn draw_tile_for_user(&mut self, user: &str) -> Option<String> {
+        while let Some(pos) = self.tile_bag.pop_front() {
+            if self.tiles.contains(&pos) || self.tile_in_any_hand(&pos) {
+                continue;
+            }
+            self.player_tiles
+                .entry(user.to_string())
+                .or_default()
+                .insert(pos.clone());
+            return Some(pos);
+        }
+        None
+    }
+
+    fn refill_player_tiles(&mut self, user: &str, target: usize) {
+        let mut hand_size = self
+            .player_tiles
+            .get(user)
+            .map(HashSet::len)
+            .unwrap_or(0);
+        while hand_size < target {
+            if self.draw_tile_for_user(user).is_none() {
+                break;
+            }
+            hand_size += 1;
         }
     }
 
@@ -239,6 +285,21 @@ impl AcquireState {
         PlacementKind::Isolated
     }
 
+    fn has_founding_opportunity_on_board(&self) -> bool {
+        for col in 1..=BOARD_MAX_COL {
+            for row in 1..=BOARD_MAX_ROW {
+                let pos = Self::encode_pos(col, row);
+                if self.tiles.contains(&pos) {
+                    continue;
+                }
+                if matches!(self.classify_placement(&pos), PlacementKind::FoundCandidate) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     fn consume_connected_independent_component(&mut self, root_pos: &str) -> HashSet<String> {
         let mut component = HashSet::new();
         let mut q = VecDeque::new();
@@ -283,8 +344,10 @@ impl AcquireState {
     }
 
     fn share_price_for_size(company_id: &str, size: usize) -> i64 {
+        if size < 2 {
+            return 0;
+        }
         let base = match size {
-            0 | 1 => 0,
             2 => 200,
             3 => 300,
             4 => 400,
@@ -464,8 +527,9 @@ impl AcquireState {
 
         let has_active = !self.companies.is_empty();
         let all_safe = self.companies.values().all(|c| c.safe);
-        let no_new_company_slot = self.first_inactive_company().is_none();
-        has_active && all_safe && no_new_company_slot
+        let no_new_company_possible = self.first_inactive_company().is_none()
+            || !self.has_founding_opportunity_on_board();
+        has_active && all_safe && no_new_company_possible
     }
 
     fn settle_endgame(&mut self) {
@@ -482,7 +546,9 @@ impl AcquireState {
                 if qty <= 0 {
                     continue;
                 }
-                liquidation += qty * self.company_share_price(&cid);
+                if self.companies.contains_key(&cid) {
+                    liquidation += qty * self.company_share_price(&cid);
+                }
                 self.set_share_count(uid, &cid, 0);
             }
             *self.players.entry(uid.clone()).or_insert(0) += liquidation;
@@ -540,6 +606,22 @@ impl AcquireState {
         self.tile_company
             .entry(placed_pos.to_string())
             .or_insert_with(|| survivor.to_string());
+
+        // Any independent regions adjacent to the merge tile are absorbed by the survivor.
+        let mut absorbed_independent = HashSet::new();
+        for n in Self::neighbors(placed_pos) {
+            if self.independent_tiles.contains(&n) {
+                let comp = self.consume_connected_independent_component(&n);
+                absorbed_independent.extend(comp);
+            }
+        }
+        if let Some(survivor_company) = self.companies.get_mut(survivor) {
+            for t in absorbed_independent {
+                self.tile_company.insert(t.clone(), survivor.to_string());
+                survivor_company.tiles.insert(t);
+            }
+            AcquireState::refresh_company_safety(survivor_company);
+        }
 
         Ok(())
     }
@@ -606,6 +688,8 @@ impl Game for AcquireGame {
         if !s.players.contains_key(&user) {
             s.players.insert(user.clone(), 6000);
             s.shares.insert(user.clone(), HashMap::new());
+            s.player_tiles.insert(user.clone(), HashSet::new());
+            s.refill_player_tiles(&user, 6);
             s.turn_order.push(user.clone());
         }
 
@@ -638,6 +722,10 @@ impl Game for AcquireGame {
             s.shares
                 .entry(action.user_id.clone())
                 .or_insert_with(HashMap::new);
+            s.player_tiles
+                .entry(action.user_id.clone())
+                .or_insert_with(HashSet::new);
+            s.refill_player_tiles(&action.user_id, 6);
             if !s.turn_order.iter().any(|u| u == &action.user_id) {
                 s.turn_order.push(action.user_id.clone());
             }
@@ -692,6 +780,16 @@ impl Game for AcquireGame {
                             "invalid_position".into(),
                         ));
                     }
+                    let in_hand = s
+                        .player_tiles
+                        .get(&action.user_id)
+                        .map(|h| h.contains(pos))
+                        .unwrap_or(false);
+                    if !in_hand {
+                        return ActionResult::Err(game::GameError::Invalid(
+                            "tile_not_in_hand".into(),
+                        ));
+                    }
                     // naive placement: reject if already placed
                     if s.tiles.contains(pos) {
                         return ActionResult::Err(game::GameError::Invalid(
@@ -702,6 +800,10 @@ impl Game for AcquireGame {
                     let placement = s.classify_placement(pos);
 
                     s.tiles.insert(pos.to_string());
+                    if let Some(hand) = s.player_tiles.get_mut(&action.user_id) {
+                        hand.remove(pos);
+                    }
+                    s.refill_player_tiles(&action.user_id, 6);
                     s.moves.push((action.user_id.clone(), pos.to_string()));
 
                     let mut placement_label = "isolated".to_string();
@@ -711,8 +813,19 @@ impl Game for AcquireGame {
                         }
                         PlacementKind::Expand(company_id) => {
                             s.tile_company.insert(pos.to_string(), company_id.clone());
+                            let mut absorbed_independent = HashSet::new();
+                            for n in AcquireState::neighbors(pos) {
+                                if s.independent_tiles.contains(&n) {
+                                    let comp = s.consume_connected_independent_component(&n);
+                                    absorbed_independent.extend(comp);
+                                }
+                            }
                             if let Some(company) = s.companies.get_mut(company_id) {
                                 company.tiles.insert(pos.to_string());
+                                for t in absorbed_independent {
+                                    s.tile_company.insert(t.clone(), company_id.clone());
+                                    company.tiles.insert(t);
+                                }
                                 AcquireState::refresh_company_safety(company);
                             }
                             placement_label = format!("expand:{}", company_id);
@@ -821,16 +934,20 @@ impl Game for AcquireGame {
                     .payload
                     .get("company")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("__generic__")
-                    .to_string();
+                    .map(ToString::to_string);
 
-                if company != "__generic__" {
-                    if !s.companies.contains_key(&company) {
+                if shares > 0 {
+                    let Some(cid) = company.as_ref() else {
+                        return ActionResult::Err(game::GameError::Invalid(
+                            "missing_company_for_buy".into(),
+                        ));
+                    };
+                    if !s.companies.contains_key(cid) {
                         return ActionResult::Err(game::GameError::Invalid(
                             "company_not_active".into(),
                         ));
                     }
-                    if let Some(pool) = s.stock_pool.get(&company)
+                    if let Some(pool) = s.stock_pool.get(cid)
                         && *pool < shares
                     {
                         return ActionResult::Err(game::GameError::Invalid(
@@ -839,10 +956,11 @@ impl Game for AcquireGame {
                     }
                 }
 
-                let unit_price = if company == "__generic__" {
-                    100
+                let unit_price = if shares > 0 {
+                    let cid = company.as_ref().expect("checked above when shares > 0");
+                    s.company_share_price(cid)
                 } else {
-                    s.company_share_price(&company)
+                    0
                 };
                 if shares > 0 && unit_price <= 0 {
                     return ActionResult::Err(game::GameError::Invalid("company_not_tradeable".into()));
@@ -856,17 +974,18 @@ impl Game for AcquireGame {
                 *player_cash -= cost;
                 let cash_after = *player_cash;
 
-                if company != "__generic__" {
-                    if let Some(pool) = s.stock_pool.get_mut(&company) {
+                if shares > 0 {
+                    let cid = company.as_ref().expect("checked above when shares > 0");
+                    if let Some(pool) = s.stock_pool.get_mut(cid) {
                         *pool -= shares;
                     }
+                    *s.share_mut(&action.user_id, cid) += shares;
                 }
-                *s.share_mut(&action.user_id, &company) += shares;
 
                 let holding_after = s
                     .shares
                     .get(&action.user_id)
-                    .and_then(|m| m.get(&company))
+                    .and_then(|m| company.as_ref().and_then(|cid| m.get(cid)))
                     .copied()
                     .unwrap_or(0);
 
@@ -1204,6 +1323,39 @@ impl Game for AcquireGame {
                     }],
                 }
             }
+            "draw_tile" => {
+                let hand_size = s
+                    .player_tiles
+                    .get(&action.user_id)
+                    .map(HashSet::len)
+                    .unwrap_or(0);
+                if hand_size >= 6 {
+                    return ActionResult::Err(game::GameError::Invalid(
+                        "hand_already_full".into(),
+                    ));
+                }
+
+                let drawn = s.draw_tile_for_user(&action.user_id);
+                let Some(pos) = drawn else {
+                    return ActionResult::Err(game::GameError::Invalid(
+                        "tile_bag_empty".into(),
+                    ));
+                };
+
+                ActionResult::Ok {
+                    events: vec![],
+                    broadcasts: vec![Outbound {
+                        target: OutboundTarget::User(action.user_id.clone()),
+                        payload: json!({
+                            "type": "draw_tile_ok",
+                            "user": action.user_id,
+                            "tile": pos,
+                            "hand": s.player_tiles.get(&action.user_id).cloned().unwrap_or_default(),
+                            "remaining": s.tile_bag.len(),
+                        }),
+                    }],
+                }
+            }
             _ => ActionResult::Err(game::GameError::Invalid("unknown action type".into())),
         }
     }
@@ -1246,6 +1398,15 @@ mod tests {
             .expect("state should be AcquireState")
     }
 
+    fn grant_tile(state: &mut Box<dyn GameState>, user: &str, pos: &str) {
+        let s = downcast_state_mut(state.as_mut());
+        s.player_tiles
+            .entry(user.to_string())
+            .or_default()
+            .insert(pos.to_string());
+        s.tile_bag.retain(|t| t != pos);
+    }
+
     async fn place_and_buy_zero(
         game: &AcquireGame,
         ctx: &ActionCtx,
@@ -1253,6 +1414,7 @@ mod tests {
         user: &str,
         pos: &str,
     ) {
+        grant_tile(state, user, pos);
         let place = game
             .handle_action(
                 ctx,
@@ -1300,6 +1462,7 @@ mod tests {
         place_and_buy_zero(game, ctx, &mut state, "u1", "1C").await;
 
         // Found Sackson and buy one extra share so u2 has 2 shares total in loser company.
+        grant_tile(&mut state, "u2", "2C");
         let found_sackson = game
             .handle_action(
                 ctx,
@@ -1326,6 +1489,7 @@ mod tests {
         assert!(matches!(buy_sackson, ActionResult::Ok { .. }));
 
         // Trigger tie merge and resolve survivor as Worldwide.
+        grant_tile(&mut state, "u1", "1B");
         let place_merge = game
             .handle_action(
                 ctx,
@@ -1440,12 +1604,27 @@ mod tests {
             _ => panic!("expected invalid shares"),
         }
 
-        // valid buy advances to next player's place phase
+        // cannot buy non-zero shares without specifying an active company.
+        let missing_company = game
+            .handle_action(
+                &ctx,
+                state.as_mut(),
+                make_action("u1", json!({"type":"buy", "shares": 1})),
+            )
+            .await;
+        match missing_company {
+            ActionResult::Err(game::GameError::Invalid(e)) => {
+                assert_eq!(e, "missing_company_for_buy")
+            }
+            _ => panic!("expected missing_company_for_buy"),
+        }
+
+        // buy zero still advances to next player's place phase.
         let ok_buy = game
             .handle_action(
                 &ctx,
                 state.as_mut(),
-                make_action("u1", json!({"type":"buy", "shares": 2})),
+                make_action("u1", json!({"type":"buy", "shares": 0})),
             )
             .await;
         assert!(matches!(ok_buy, ActionResult::Ok { .. }));
@@ -1453,14 +1632,7 @@ mod tests {
         let s = downcast_state(state.as_ref());
         assert_eq!(s.phase, "place");
         assert_eq!(s.current_player(), Some("u2"));
-        let generic_holding = s
-            .shares
-            .get("u1")
-            .and_then(|m| m.get("__generic__"))
-            .copied()
-            .unwrap_or(0);
-        assert_eq!(generic_holding, 2);
-        assert_eq!(s.players.get("u1").copied().unwrap_or(0), 5800);
+        assert_eq!(s.players.get("u1").copied().unwrap_or(0), 6000);
     }
 
     #[tokio::test]
@@ -1477,6 +1649,7 @@ mod tests {
         place_and_buy_zero(&game, &ctx, &mut state, "u1", "1C").await;
         place_and_buy_zero(&game, &ctx, &mut state, "u2", "2C").await; // found company 2
 
+        grant_tile(&mut state, "u1", "1B");
         let place_merge = game
             .handle_action(
                 &ctx,
@@ -1706,6 +1879,7 @@ mod tests {
             );
         }
 
+        grant_tile(&mut state, "u1", "2B");
         let act = game
             .handle_action(
                 &ctx,
@@ -1732,6 +1906,7 @@ mod tests {
 
         place_and_buy_zero(&game, &ctx, &mut state, "u1", "1A").await;
 
+        grant_tile(&mut state, "u2", "2A");
         let place_found = game
             .handle_action(
                 &ctx,
@@ -1774,6 +1949,7 @@ mod tests {
         assert!(matches!(buy_zero, ActionResult::Ok { .. }));
 
         // u1 turn: create another founding opportunity
+        grant_tile(&mut state, "u1", "1C");
         let p1 = game
             .handle_action(
                 &ctx,
@@ -1791,6 +1967,7 @@ mod tests {
             .await;
         assert!(matches!(b1, ActionResult::Ok { .. }));
 
+        grant_tile(&mut state, "u2", "2C");
         let p2 = game
             .handle_action(
                 &ctx,
@@ -1888,5 +2065,293 @@ mod tests {
         // u2: 6000 + bonus 5000 + liquidation 1000 = 12000
         assert_eq!(s.players.get("u1").copied().unwrap_or(0), 19000);
         assert_eq!(s.players.get("u2").copied().unwrap_or(0), 12000);
+    }
+
+    #[tokio::test]
+    async fn expand_absorbs_adjacent_independent_component() {
+        let game = AcquireGame::new();
+        let mut state = game.create_initial_state(None).await;
+        let ctx = test_ctx();
+
+        let _ = game.on_join(&ctx, state.as_mut(), "u1".to_string()).await;
+        let _ = game.on_join(&ctx, state.as_mut(), "u2".to_string()).await;
+
+        {
+            let s = downcast_state_mut(state.as_mut());
+            s.tiles.insert("5E".to_string());
+            s.tile_company
+                .insert("5E".to_string(), "Worldwide".to_string());
+            s.companies.insert(
+                "Worldwide".to_string(),
+                CompanyState {
+                    id: "Worldwide".to_string(),
+                    tiles: HashSet::from(["5E".to_string()]),
+                    safe: false,
+                },
+            );
+            s.tiles.insert("6E".to_string());
+            s.tiles.insert("6F".to_string());
+            s.independent_tiles.insert("6E".to_string());
+            s.independent_tiles.insert("6F".to_string());
+        }
+
+        grant_tile(&mut state, "u1", "5F");
+        let place = game
+            .handle_action(
+                &ctx,
+                state.as_mut(),
+                make_action("u1", json!({"type":"place","pos":"5F"})),
+            )
+            .await;
+        assert!(matches!(place, ActionResult::Ok { .. }));
+
+        let s = downcast_state(state.as_ref());
+        let company = s
+            .companies
+            .get("Worldwide")
+            .expect("Worldwide should stay active");
+        assert!(company.tiles.contains("5E"));
+        assert!(company.tiles.contains("5F"));
+        assert!(company.tiles.contains("6E"));
+        assert!(company.tiles.contains("6F"));
+        assert!(!s.independent_tiles.contains("6E"));
+        assert!(!s.independent_tiles.contains("6F"));
+        assert_eq!(s.tile_company.get("6E").map(String::as_str), Some("Worldwide"));
+        assert_eq!(s.tile_company.get("6F").map(String::as_str), Some("Worldwide"));
+    }
+
+    #[tokio::test]
+    async fn declare_end_allowed_when_all_safe_and_no_founding_opportunity() {
+        let game = AcquireGame::new();
+        let mut state = game.create_initial_state(None).await;
+        let ctx = test_ctx();
+
+        let _ = game.on_join(&ctx, state.as_mut(), "u1".to_string()).await;
+        let _ = game.on_join(&ctx, state.as_mut(), "u2".to_string()).await;
+
+        {
+            let s = downcast_state_mut(state.as_mut());
+            let mut world_tiles = HashSet::new();
+            for col in 1..=11 {
+                let pos = format!("{}A", col);
+                s.tiles.insert(pos.clone());
+                s.tile_company.insert(pos.clone(), "Worldwide".to_string());
+                world_tiles.insert(pos);
+            }
+            s.companies.insert(
+                "Worldwide".to_string(),
+                CompanyState {
+                    id: "Worldwide".to_string(),
+                    tiles: world_tiles,
+                    safe: true,
+                },
+            );
+
+            let mut sackson_tiles = HashSet::new();
+            for col in 1..=11 {
+                let pos = format!("{}C", col);
+                s.tiles.insert(pos.clone());
+                s.tile_company.insert(pos.clone(), "Sackson".to_string());
+                sackson_tiles.insert(pos);
+            }
+            s.companies.insert(
+                "Sackson".to_string(),
+                CompanyState {
+                    id: "Sackson".to_string(),
+                    tiles: sackson_tiles,
+                    safe: true,
+                },
+            );
+        }
+
+        let res = game
+            .handle_action(
+                &ctx,
+                state.as_mut(),
+                make_action("u1", json!({"type":"declare_end"})),
+            )
+            .await;
+        assert!(matches!(res, ActionResult::Ok { .. }));
+        assert!(downcast_state(state.as_ref()).game_over);
+    }
+
+    #[tokio::test]
+    async fn declare_end_rejected_when_founding_opportunity_exists() {
+        let game = AcquireGame::new();
+        let mut state = game.create_initial_state(None).await;
+        let ctx = test_ctx();
+
+        let _ = game.on_join(&ctx, state.as_mut(), "u1".to_string()).await;
+        let _ = game.on_join(&ctx, state.as_mut(), "u2".to_string()).await;
+
+        {
+            let s = downcast_state_mut(state.as_mut());
+            let mut world_tiles = HashSet::new();
+            for col in 1..=11 {
+                let pos = format!("{}A", col);
+                s.tiles.insert(pos.clone());
+                s.tile_company.insert(pos.clone(), "Worldwide".to_string());
+                world_tiles.insert(pos);
+            }
+            s.companies.insert(
+                "Worldwide".to_string(),
+                CompanyState {
+                    id: "Worldwide".to_string(),
+                    tiles: world_tiles,
+                    safe: true,
+                },
+            );
+
+            // 2B and 4B are independent neighbors of empty 3B, so 3B can found a new company.
+            for pos in ["2B", "4B"] {
+                s.tiles.insert(pos.to_string());
+                s.independent_tiles.insert(pos.to_string());
+            }
+        }
+
+        let res = game
+            .handle_action(
+                &ctx,
+                state.as_mut(),
+                make_action("u1", json!({"type":"declare_end"})),
+            )
+            .await;
+
+        match res {
+            ActionResult::Err(game::GameError::Invalid(e)) => {
+                assert_eq!(e, "end_conditions_not_met")
+            }
+            _ => panic!("expected end_conditions_not_met"),
+        }
+    }
+
+    #[tokio::test]
+    async fn declare_end_ignores_inactive_company_holdings_in_liquidation() {
+        let game = AcquireGame::new();
+        let mut state = game.create_initial_state(None).await;
+        let ctx = test_ctx();
+
+        let _ = game.on_join(&ctx, state.as_mut(), "u1".to_string()).await;
+        let _ = game.on_join(&ctx, state.as_mut(), "u2".to_string()).await;
+
+        {
+            let s = downcast_state_mut(state.as_mut());
+            let mut tiles = HashSet::new();
+            for i in 0..41 {
+                tiles.insert(format!("{}A", i + 1));
+            }
+            s.companies.insert(
+                "Worldwide".to_string(),
+                CompanyState {
+                    id: "Worldwide".to_string(),
+                    tiles,
+                    safe: true,
+                },
+            );
+
+            s.set_share_count("u1", "Worldwide", 1);
+            s.set_share_count("u1", "Imperial", 3);
+            s.set_share_count("u2", "Worldwide", 1);
+        }
+
+        let res = game
+            .handle_action(
+                &ctx,
+                state.as_mut(),
+                make_action("u1", json!({"type":"declare_end"})),
+            )
+            .await;
+        assert!(matches!(res, ActionResult::Ok { .. }));
+
+        let s = downcast_state(state.as_ref());
+        // u1 and u2 tie for first in Worldwide, so they split (major+minor)=15000 => 7500 each.
+        // u1 gets: initial 6000 + tie bonus 7500 + Worldwide liquidation 1000 = 14500.
+        // Imperial is inactive and must not contribute to liquidation.
+        assert_eq!(s.players.get("u1").copied().unwrap_or(0), 14500);
+    }
+
+    #[tokio::test]
+    async fn on_join_deals_initial_six_tiles_per_player() {
+        let game = AcquireGame::new();
+        let mut state = game.create_initial_state(None).await;
+        let ctx = test_ctx();
+
+        let _ = game.on_join(&ctx, state.as_mut(), "u1".to_string()).await;
+        let _ = game.on_join(&ctx, state.as_mut(), "u2".to_string()).await;
+
+        let s = downcast_state(state.as_ref());
+        assert_eq!(s.player_tiles.get("u1").map(HashSet::len).unwrap_or(0), 6);
+        assert_eq!(s.player_tiles.get("u2").map(HashSet::len).unwrap_or(0), 6);
+        assert_eq!(s.tile_bag.len(), (BOARD_MAX_COL * BOARD_MAX_ROW - 12) as usize);
+    }
+
+    #[tokio::test]
+    async fn draw_tile_requires_non_full_hand_and_draws_when_available() {
+        let game = AcquireGame::new();
+        let mut state = game.create_initial_state(None).await;
+        let ctx = test_ctx();
+
+        let _ = game.on_join(&ctx, state.as_mut(), "u1".to_string()).await;
+        let _ = game.on_join(&ctx, state.as_mut(), "u2".to_string()).await;
+
+        let full_hand_draw = game
+            .handle_action(
+                &ctx,
+                state.as_mut(),
+                make_action("u1", json!({"type":"draw_tile"})),
+            )
+            .await;
+        match full_hand_draw {
+            ActionResult::Err(game::GameError::Invalid(e)) => assert_eq!(e, "hand_already_full"),
+            _ => panic!("expected hand_already_full"),
+        }
+
+        {
+            let s = downcast_state_mut(state.as_mut());
+            let removed = s
+                .player_tiles
+                .get_mut("u1")
+                .and_then(|h| h.iter().next().cloned())
+                .expect("u1 should have a tile");
+            s.player_tiles
+                .get_mut("u1")
+                .expect("u1 hand exists")
+                .remove(&removed);
+        }
+
+        let draw_ok = game
+            .handle_action(
+                &ctx,
+                state.as_mut(),
+                make_action("u1", json!({"type":"draw_tile"})),
+            )
+            .await;
+        assert!(matches!(draw_ok, ActionResult::Ok { .. }));
+
+        let s = downcast_state(state.as_ref());
+        assert_eq!(s.player_tiles.get("u1").map(HashSet::len).unwrap_or(0), 6);
+    }
+
+    #[tokio::test]
+    async fn place_rejected_when_tile_not_in_hand() {
+        let game = AcquireGame::new();
+        let mut state = game.create_initial_state(None).await;
+        let ctx = test_ctx();
+
+        let _ = game.on_join(&ctx, state.as_mut(), "u1".to_string()).await;
+        let _ = game.on_join(&ctx, state.as_mut(), "u2".to_string()).await;
+
+        let res = game
+            .handle_action(
+                &ctx,
+                state.as_mut(),
+                make_action("u1", json!({"type":"place", "pos":"12I"})),
+            )
+            .await;
+
+        match res {
+            ActionResult::Err(game::GameError::Invalid(e)) => assert_eq!(e, "tile_not_in_hand"),
+            _ => panic!("expected tile_not_in_hand"),
+        }
     }
 }

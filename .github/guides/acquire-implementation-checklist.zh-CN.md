@@ -23,8 +23,8 @@
 - [x] turn_no: 回合号
 - [x] board_cells: 邻接解析能力已具备（坐标解析 + 上下左右邻接）
 - [x] companies: 公司状态（激活公司、规模、安全状态）
-- [ ] player_tiles: 手牌（每人 6 张）
-- [ ] tile_bag: 板块池（抽牌来源）
+- [x] player_tiles: 手牌（每人 6 张，已支持落子后补牌）
+- [x] tile_bag: 板块池（抽牌来源，已支持 draw_tile 消耗）
 - [x] merge_context: 合并处理上下文（已支持平规模待决）
 - [x] game_end_flag: 可结束状态与终局声明者（game_over + final_standings）
 
@@ -49,8 +49,8 @@
 
 建议补充：
 
-- [ ] draw_tile
-  - 可作为显式动作，或由回合结束自动执行
+- [x] draw_tile
+  - 已支持显式动作；手牌已满/牌袋为空会拒绝
 
 ## 3. 规则校验（Validation）
 
@@ -62,6 +62,7 @@
 - [x] 买股数量限制：0..=3
 - [x] 现金不足拒绝购买
 - [x] 重复坐标落子拒绝
+- [x] 落子必须来自手牌（tile_not_in_hand）
 
 ### 3.2 待落地（核心）
 
@@ -77,14 +78,15 @@
 - [x] 创立奖励股（若库存>0）
 - [x] 终局触发条件
   - 任一公司 >= 41
-  - 全部活跃公司安全且无法新建公司（最小实现：无可新建公司槽位）
+  - 全部活跃公司安全且无法新建公司（已改为版图可行性判定，不再仅看槽位）
 - [x] 终局清算（发奖+抛售）
 
 ## 4. 价格系统（Pricing）
 
 当前：
 
-- [x] 动态股价已接入（公司等级 + 规模）；`__generic__` 兼容路径仍使用 100
+- [x] 动态股价已接入（公司等级 + 规模）
+- [x] 非零 buy 已移除 `__generic__` 兼容买入路径
 
 待实现：
 
@@ -108,6 +110,7 @@
 - [x] turn_advanced
 - [x] buy_ok（对操作者）
 - [x] final_scored
+- [x] draw_tile_ok（对操作者）
 
 建议标准事件（待补）：
 
@@ -120,7 +123,7 @@
 - [ ] bonus_paid
 - [ ] shares_converted
 - [ ] shares_sold
-- [ ] hand_refilled
+- [ ] hand_refilled（当前由 state 快照可推导，未拆独立事件）
 - [ ] end_declared
 - [x] final_scored
 
@@ -138,6 +141,13 @@
 - [x] merge_stock_decision_trade_converts_two_to_one
 - [x] declare_end_rejected_when_conditions_not_met
 - [x] declare_end_scores_and_sets_winner
+- [x] expand_absorbs_adjacent_independent_component
+- [x] declare_end_allowed_when_all_safe_and_no_founding_opportunity
+- [x] declare_end_rejected_when_founding_opportunity_exists
+- [x] declare_end_ignores_inactive_company_holdings_in_liquidation
+- [x] on_join_deals_initial_six_tiles_per_player
+- [x] draw_tile_requires_non_full_hand_and_draws_when_available
+- [x] place_rejected_when_tile_not_in_hand
 
 下一批必须补：
 
@@ -151,28 +161,23 @@
 
 ## 7. 建议实施顺序（可直接执行）
 
-1. 棋盘与公司模型落地
-- 增加 board/companies/stock_pool 数据结构。
-- 将 shares 改为按公司维度持有。
+1. merge_stock_decision 细粒度化
+- 支持同一被并公司在一个结算窗口内混合 sell/trade/hold（而非一次性决策）。
 
-2. 落子解析与合并框架
-- place 后进入 resolve 子阶段，计算邻接图并产出分类结果。
+2. 开局规则对齐
+- 对齐规则书第 1、2 节的先手决定与开局流程（当前仍是最小闭环实现）。
 
-3. 价格与奖金系统
-- 先实现股价函数，再接入 merge 和 end 结算。
+3. 事件语义补齐
+- 视客户端需求拆分 bonus_paid / shares_converted / shares_sold / hand_refilled / end_declared。
 
-4. 股票处理动作
-- 完成 merge_stock_decision 的三选一流程和校验。
-
-5. 终局与结算
-- declare_end + final_scored 事件。
-
-6. 测试补齐
-- 按测试矩阵逐项补齐，保证每条核心规则至少 1 正例 + 1 反例。
+4. 测试补齐
+- 强化奖金平手分配覆盖。
+- 增加快照恢复后一致性用例。
+- 增加牌袋耗尽与长局补牌一致性用例。
 
 ## 8. 本周最小里程碑（建议）
 
-- M1: 完成棋盘邻接与公司模型。
-- M2: 完成创立/扩张/合并基础判定。
-- M3: 完成奖金与股票处理。
-- M4: 完成终局结算与回归测试。
+- M1: 完成 merge_stock_decision 细粒度化。
+- M2: 完成开局规则（先手/初始流程）对齐。
+- M3: 完成事件拆分并与客户端约定字段。
+- M4: 完成快照恢复与长局补牌回归测试。
