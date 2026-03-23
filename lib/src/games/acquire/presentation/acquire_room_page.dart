@@ -180,6 +180,13 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     final envelope = _latestEnvelope;
     final state = envelope?.state;
     final isMyTurn = state?.currentPlayer == widget.session.userId;
+    final myPendingMergeCompanies = state == null
+        ? const <String>[]
+        : ((state.mergeSettlement?.pending[widget.session.userId] ?? const <String>{}).toList()..sort());
+    final canActNow = state != null &&
+        !_busy &&
+        !_leaving &&
+        (isMyTurn || (state.phase == 'merge_stock_decision' && myPendingMergeCompanies.isNotEmpty));
 
     return Scaffold(
       appBar: AppBar(title: Text('Room: ${widget.session.roomId}')),
@@ -191,13 +198,15 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildRoomStateCard(theme, envelope, state, isMyTurn),
+                _buildRoomStateCard(theme, envelope, state, isMyTurn, canActNow, myPendingMergeCompanies),
                 const SizedBox(height: 12),
-                _buildActionCard(theme, state, isMyTurn),
+                _buildActionCard(theme, state, isMyTurn, canActNow, myPendingMergeCompanies),
                 const SizedBox(height: 12),
                 _buildHandCard(theme, state, isMyTurn),
                 const SizedBox(height: 12),
                 _buildPlayersCard(theme, state),
+                const SizedBox(height: 12),
+                _buildCompaniesCard(theme, state),
                 const SizedBox(height: 12),
                 _buildActivityCard(theme),
                 const SizedBox(height: 12),
@@ -228,6 +237,8 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     AcquireStateEnvelope? envelope,
     AcquireStateSnapshot? state,
     bool isMyTurn,
+    bool canActNow,
+    List<String> myPendingMergeCompanies,
   ) {
     return Card(
       child: Padding(
@@ -246,6 +257,9 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
               Text('turn: ${state.turnNo}'),
               Text('current_player: ${state.currentPlayer}'),
               Text('my_turn: $isMyTurn'),
+              Text('can_act_now: $canActNow'),
+              if (myPendingMergeCompanies.isNotEmpty)
+                Text('pending_merge_decisions: ${myPendingMergeCompanies.join(', ')}'),
               if (envelope != null && envelope.event.isNotEmpty) Text('last_event: ${envelope.event}'),
             ] else
               const Text('Waiting for first state snapshot...'),
@@ -259,13 +273,20 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     );
   }
 
-  Widget _buildActionCard(ThemeData theme, AcquireStateSnapshot? state, bool isMyTurn) {
+  Widget _buildActionCard(
+    ThemeData theme,
+    AcquireStateSnapshot? state,
+    bool isMyTurn,
+    bool canActNow,
+    List<String> myPendingMergeCompanies,
+  ) {
     if (state == null) {
       return const SizedBox.shrink();
     }
 
     final myPhase = state.phase;
-    final canOperate = isMyTurn && !_busy && !_leaving;
+    final canOperate = canActNow;
+    final myHandSize = (state.playerTiles[widget.session.userId] ?? const <String>{}).length;
 
     return Card(
       child: Padding(
@@ -278,14 +299,15 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
             if (myPhase == 'buy') _buildBuyPanel(theme, state, canOperate),
             if (myPhase == 'choose_company') _buildChooseCompanyPanel(theme, state, canOperate),
             if (myPhase == 'resolve_merge') _buildResolveMergePanel(theme, state, canOperate),
-            if (myPhase == 'merge_stock_decision') _buildMergeStockDecisionPanel(theme, state, canOperate),
+            if (myPhase == 'merge_stock_decision')
+              _buildMergeStockDecisionPanel(theme, state, canOperate, myPendingMergeCompanies),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
                 OutlinedButton(
-                  onPressed: canOperate
+                  onPressed: canOperate && isMyTurn && myHandSize < 6
                       ? () => _runAction(
                             () => _client.drawTile(
                               room: widget.session.roomId,
@@ -296,7 +318,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                   child: const Text('Draw Tile'),
                 ),
                 OutlinedButton(
-                  onPressed: canOperate && (myPhase == 'place' || myPhase == 'buy')
+                  onPressed: canOperate && isMyTurn && (myPhase == 'place' || myPhase == 'buy')
                       ? () => _runAction(
                             () => _client.declareEnd(
                               room: widget.session.roomId,
@@ -380,12 +402,17 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
   Widget _buildChooseCompanyPanel(ThemeData theme, AcquireStateSnapshot state, bool canOperate) {
     final active = state.companies.keys.toSet();
     final candidates = AcquireClient.companyCatalog.where((c) => !active.contains(c)).toList();
+    final foundingTiles = (state.foundingContext?.tiles ?? const <String>[])..sort();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text('Choose Company', style: theme.textTheme.titleMedium),
         const SizedBox(height: 8),
+        if (foundingTiles.isNotEmpty)
+          Text('Founding tiles: ${foundingTiles.join(', ')}'),
+        if (foundingTiles.isNotEmpty)
+          const SizedBox(height: 8),
         Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -442,9 +469,18 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     );
   }
 
-  Widget _buildMergeStockDecisionPanel(ThemeData theme, AcquireStateSnapshot state, bool canOperate) {
-    final pending = state.mergeSettlement?.pending[widget.session.userId] ?? const <String>{};
-    final companies = pending.toList()..sort();
+  Widget _buildMergeStockDecisionPanel(
+    ThemeData theme,
+    AcquireStateSnapshot state,
+    bool canOperate,
+    List<String> companies,
+  ) {
+    final holdings = state.shares[widget.session.userId] ?? const <String, int>{};
+    final maxHolding = companies.fold<int>(0, (maxValue, company) {
+      final holding = holdings[company] ?? 0;
+      return holding > maxValue ? holding : maxValue;
+    });
+    final maxShareInput = maxHolding < 2 ? 2 : maxHolding;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -470,10 +506,21 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                       children: [
                         Text(company, style: theme.textTheme.titleSmall),
                         const SizedBox(height: 6),
+                        Text('holding: ${holdings[company] ?? 0}'),
+                        const SizedBox(height: 6),
                         Wrap(
                           spacing: 6,
                           runSpacing: 6,
                           children: [
+                            ...() {
+                              final holding = holdings[company] ?? 0;
+                              final sellShares = _mergeShares.clamp(1, holding);
+                              final maxTradeShares = holding - (holding % 2);
+                              final tradeShares = _mergeShares.clamp(2, maxTradeShares);
+                              final canSell = canOperate && holding > 0;
+                              final canTrade = canOperate && maxTradeShares >= 2;
+
+                              return [
                             OutlinedButton(
                               onPressed: canOperate
                                   ? () => _runAction(
@@ -488,33 +535,35 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                               child: const Text('Hold'),
                             ),
                             OutlinedButton(
-                              onPressed: canOperate
+                              onPressed: canSell
                                   ? () => _runAction(
                                         () => _client.mergeStockDecision(
                                           room: widget.session.roomId,
                                           userId: widget.session.userId,
                                           company: company,
                                           mode: 'sell',
-                                          shares: _mergeShares,
+                                          shares: sellShares,
                                         ),
                                       )
                                   : null,
-                              child: Text('Sell $_mergeShares'),
+                              child: Text('Sell $sellShares'),
                             ),
                             OutlinedButton(
-                              onPressed: canOperate
+                              onPressed: canTrade
                                   ? () => _runAction(
                                         () => _client.mergeStockDecision(
                                           room: widget.session.roomId,
                                           userId: widget.session.userId,
                                           company: company,
                                           mode: 'trade',
-                                          shares: _mergeShares,
+                                          shares: tradeShares,
                                         ),
                                       )
                                   : null,
-                              child: Text('Trade $_mergeShares'),
+                              child: Text('Trade $tradeShares'),
                             ),
+                              ];
+                            }(),
                           ],
                         ),
                       ],
@@ -539,11 +588,13 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
               child: const Text('-'),
             ),
             OutlinedButton(
-              onPressed: () {
-                setState(() {
-                  _mergeShares += 1;
-                });
-              },
+              onPressed: _mergeShares < maxShareInput
+                  ? () {
+                      setState(() {
+                        _mergeShares += 1;
+                      });
+                    }
+                  : null,
               child: const Text('+'),
             ),
           ],
@@ -628,6 +679,55 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
               Text('Final Standings', style: theme.textTheme.titleMedium),
               const SizedBox(height: 6),
               ...state.finalStandings.map((f) => Text('${f.userId}: ${f.cash}')),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCompaniesCard(ThemeData theme, AcquireStateSnapshot? state) {
+    if (state == null) {
+      return const SizedBox.shrink();
+    }
+
+    final companies = state.companies.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Companies', style: theme.textTheme.titleLarge),
+            const SizedBox(height: 8),
+            if (companies.isEmpty) const Text('No active companies.'),
+            if (companies.isNotEmpty)
+              ...companies.map((entry) {
+                final id = entry.key;
+                final company = entry.value;
+                final pool = state.stockPool[id] ?? 0;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text(
+                    '$id  size=${company.tiles.length}  safe=${company.safe}  stock_pool=$pool',
+                  ),
+                );
+              }),
+            if (state.mergeContext != null) ...[
+              const Divider(height: 24),
+              Text('Merge Context', style: theme.textTheme.titleMedium),
+              const SizedBox(height: 6),
+              Text('placed: ${state.mergeContext!.placedPos}'),
+              Text('candidates: ${state.mergeContext!.candidates.join(', ')}'),
+              Text('allowed_survivors: ${state.mergeContext!.allowedSurvivors.join(', ')}'),
+            ],
+            if (state.mergeSettlement != null) ...[
+              const Divider(height: 24),
+              Text('Merge Settlement', style: theme.textTheme.titleMedium),
+              const SizedBox(height: 6),
+              Text('survivor: ${state.mergeSettlement!.survivor}'),
+              Text('losers: ${state.mergeSettlement!.losers.join(', ')}'),
             ],
           ],
         ),
