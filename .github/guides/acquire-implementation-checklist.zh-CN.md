@@ -4,6 +4,7 @@
 
 关联文档：
 - 规则说明书：.github/guides/acquire-rulebook.zh-CN.md
+- 前后端协议：.github/guides/acquire-client-server-protocol.zh-CN.md
 - 当前实现：
   - acquire_plugin/src/lib.rs（模块入口与导出）
   - acquire_plugin/src/model.rs（状态结构定义）
