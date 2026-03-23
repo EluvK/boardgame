@@ -301,9 +301,30 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _openRoomDetail({required String roomId, String? gameId}) {
+    final api = _api;
+    final userId = _deviceId;
+    if (api == null || !_connected || !_authed) {
+      setState(() {
+        _message = 'Connect and auth first';
+      });
+      return;
+    }
+    if (userId == null || userId.isEmpty) {
+      setState(() {
+        _message = 'Device ID not ready';
+      });
+      return;
+    }
+
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => RoomDetailPage(roomId: roomId, gameId: gameId, onLeaveRoom: _leaveRoom),
+        builder: (_) => RoomDetailPage(
+          roomId: roomId,
+          gameId: gameId,
+          userId: userId,
+          api: api,
+          onLeaveRoom: _leaveRoom,
+        ),
       ),
     );
   }
