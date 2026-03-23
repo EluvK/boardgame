@@ -1,70 +1,100 @@
 # boardgame_acquire
 
-## E2E Smoke Flow
+## 当前状态（2026-03-23）
 
-This checklist validates the current baseline: room lifecycle events, lobby push updates, and web routing scaffold.
+项目已从基础联调阶段进入可多人对局阶段，Acquire 的核心回合流程可跑通，且服务端与 Flutter 客户端协议已对齐。
 
-### 1. Start server runtime
+### 已完成
+
+- 房间 ready 门禁：所有玩家 ready 且满足最少人数后才开局。
+- 房间内动作门禁：未开局前拒绝 action，返回 `room_not_started_wait_for_all_ready`。
+- 进房与重连同步：`join_room` 的 `already_in_room` 分支会回灌最新 `state` 和 `ready_state`。
+- 广播修复：`OutboundTarget::All` 会先发给当前 socket，再发房间其他用户，避免 sender 丢首帧。
+- buy 协议升级：仅支持 `purchases`（多公司、总计 0..3），移除旧单公司字段语义。
+- 无可买自动 pass：当前玩家在 buy 阶段无可买股票时客户端自动提交空购买。
+- 地图渲染增强：公司连块视觉、悬停信息、整家公司 hover 联动高亮。
+- 发牌随机化：开局时打乱完整坐标序列，后续按序发牌。
+
+### 关键协议点
+
+- 客户端上行
+	- `set_ready`: `{ room, ready }`
+	- `action`: `{ room, action }`
+	- `buy` action payload: `{ type: "buy", purchases: { [companyId]: qty } }`
+
+- 服务端下行
+	- `ready_result`
+	- `action_result`
+	- `broadcast` with `type = state | ready_state`
+	- `rooms_updated`
+
+## 快速启动
+
+### 1. 启动服务端
 
 ```bash
 cargo run -p bg_runtime
 ```
 
-Expected:
-- server listens on `http://127.0.0.1:17980`
-- socket path is `/socket.io`
-- game list includes `acquire`
-- demo room `acquire_demo` exists
+默认地址：`http://127.0.0.1:17980`，Socket 路径：`/socket.io`。
 
-### 2. Start Flutter web client
+### 2. 启动 Flutter Web
 
 ```bash
 flutter run -d chrome
 ```
 
-In Home page:
+在首页填写：
+
 - Server URL: `http://127.0.0.1:17980`
-- Display Name: any non-empty string
-- Click `Connect`
+- Display Name: 任意非空
 
-Expected:
-- status shows connected/authenticated
-- Games list contains `Acquire (minimal)`
-- Rooms list shows `acquire_demo`
+### 3. 双客户端调试（推荐）
 
-### 3. Room lifecycle smoke
+已提供 VS Code 方案：[.vscode/launch.json](.vscode/launch.json)
 
-1. Create a room
-2. Verify room appears in rooms list
-3. Join the room
-4. Verify Room Detail page opens
-5. Leave the room (socket event path currently from API side)
-6. Close room by emitting `close_room` (manual socket test for now)
+- `Chrome Client A`（5001）
+- `Chrome Client B`（5002）
+- `Dual Chrome Clients`（compound）
 
-Expected socket events:
-- `create_room_result`
-- `joined`
-- `left`
-- `close_room_result`
-- `rooms_updated` (pushed on lifecycle changes)
+## 回归检查清单
 
-### 4. Multi-tab push update smoke
+### 房间与开局
 
-1. Open two browser tabs to the web lobby
-2. Connect both tabs
-3. Create room in tab A
+1. 两个客户端进同一房间。
+2. 任一客户端未 ready 时，无法 action。
+3. 全员 ready 后收到 `ready_state.started=true` 且广播 `state(event=game_started)`。
 
-Expected:
-- tab B receives lobby update without manual refresh
-- room list in tab B updates from `rooms_updated`
+### 状态同步
 
-### 5. Compile/analyze checks
+1. 客户端 A 在房内操作。
+2. 刷新客户端 B 并重进房间。
+3. B 应立即收到当前 `state`（`event=rejoin_sync`）与 `ready_state`。
+
+### buy 阶段
+
+1. 支持跨多个公司购买，总股数 0..3。
+2. 现金不足时禁止提交。
+3. 无可买公司时自动 pass。
+
+### 发牌随机性
+
+1. 新建房间并开局多次。
+2. 观察不同局首轮手牌应明显不同，非固定从 `1A` 开始。
+
+## 编译检查
 
 ```bash
 cargo check --workspace
-flutter analyze lib/src/home/home_page.dart lib/src/room/room_detail_page.dart lib/src/api/lobby_api.dart
+flutter analyze
 ```
 
-Expected:
-- no compile errors
-- no dart analyze issues
+当前已知情况：`boardgames_server` 有少量 unused variable warning，不影响运行。
+
+## 关键代码位置
+
+- 开局 ready 门禁与房间元数据：[boardgames_server/src/room.rs](boardgames_server/src/room.rs)
+- join/rejoin/ready 广播流程：[boardgames_server/src/server.rs](boardgames_server/src/server.rs)
+- Acquire 规则与发牌随机化：[acquire_plugin/src/engine.rs](acquire_plugin/src/engine.rs)
+- 客户端房间页面与地图渲染：[lib/src/games/acquire/presentation/acquire_room_page.dart](lib/src/games/acquire/presentation/acquire_room_page.dart)
+- 客户端动作封装（含 `buy.purchases`）：[lib/src/games/acquire/data/acquire_client.dart](lib/src/games/acquire/data/acquire_client.dart)
