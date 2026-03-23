@@ -275,7 +275,12 @@ class _HomePageState extends State<HomePage> {
       }
 
       await api.joinRoom(roomId);
-      _openRoomDetail(roomId: roomId);
+      final resolvedGameId = _rooms
+          .where((r) => r.id == roomId)
+          .map((r) => r.gameId)
+          .cast<String?>()
+          .firstWhere((id) => id != null && id.isNotEmpty, orElse: () => _selectedGameId);
+      _openRoomDetail(roomId: roomId, gameId: resolvedGameId);
       setState(() {
         _message = 'Joined room "$roomId"';
       });
@@ -316,11 +321,18 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
+    final resolvedGameId = gameId ??
+        _rooms
+            .where((r) => r.id == roomId)
+            .map((r) => r.gameId)
+            .cast<String?>()
+            .firstWhere((id) => id != null && id.isNotEmpty, orElse: () => null);
+
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => RoomDetailPage(
           roomId: roomId,
-          gameId: gameId,
+          gameId: resolvedGameId,
           userId: userId,
           api: api,
           onLeaveRoom: _leaveRoom,

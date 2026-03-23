@@ -16,21 +16,9 @@ class LobbyApi {
   final List<void Function(Map<String, dynamic>)> _messageListeners = [];
   Map<String, dynamic>? _latestStatePayload;
 
-  static const List<String> _acquireCompanies = [
-    'Sackson',
-    'Zeta',
-    'America',
-    'Fusion',
-    'Hydra',
-    'Phoenix',
-    'Worldwide',
-  ];
-
   bool get isConnected => _socket?.connected ?? false;
 
   Map<String, dynamic>? get latestStatePayload => _latestStatePayload;
-
-  List<String> get acquireCompanyCatalog => _acquireCompanies;
 
   Future<void> connect() async {
     if (isConnected) {
@@ -218,141 +206,6 @@ class LobbyApi {
     }
   }
 
-  Future<void> place({
-    required String room,
-    required String userId,
-    required String pos,
-  }) {
-    return sendAction(
-      room: room,
-      action: {
-        'id': _actionId(userId),
-        'user_id': userId,
-        'payload': {'type': 'place', 'pos': pos},
-        'seq': null,
-        'meta': null,
-      },
-    );
-  }
-
-  Future<void> buy({
-    required String room,
-    required String userId,
-    required int shares,
-    String? company,
-  }) {
-    return sendAction(
-      room: room,
-      action: {
-        'id': _actionId(userId),
-        'user_id': userId,
-        'payload': {
-          'type': 'buy',
-          'shares': shares,
-          if (company != null && company.isNotEmpty) 'company': company,
-        },
-        'seq': null,
-        'meta': null,
-      },
-    );
-  }
-
-  Future<void> chooseCompany({
-    required String room,
-    required String userId,
-    required String company,
-  }) {
-    return sendAction(
-      room: room,
-      action: {
-        'id': _actionId(userId),
-        'user_id': userId,
-        'payload': {
-          'type': 'choose_company',
-          'company': company,
-        },
-        'seq': null,
-        'meta': null,
-      },
-    );
-  }
-
-  Future<void> resolveMerge({
-    required String room,
-    required String userId,
-    required String survivor,
-  }) {
-    return sendAction(
-      room: room,
-      action: {
-        'id': _actionId(userId),
-        'user_id': userId,
-        'payload': {
-          'type': 'resolve_merge',
-          'survivor': survivor,
-        },
-        'seq': null,
-        'meta': null,
-      },
-    );
-  }
-
-  Future<void> mergeStockDecision({
-    required String room,
-    required String userId,
-    required String company,
-    required String mode,
-    int? shares,
-  }) {
-    return sendAction(
-      room: room,
-      action: {
-        'id': _actionId(userId),
-        'user_id': userId,
-        'payload': {
-          'type': 'merge_stock_decision',
-          'company': company,
-          'mode': mode,
-          'shares': shares,
-        },
-        'seq': null,
-        'meta': null,
-      },
-    );
-  }
-
-  Future<void> declareEnd({
-    required String room,
-    required String userId,
-  }) {
-    return sendAction(
-      room: room,
-      action: {
-        'id': _actionId(userId),
-        'user_id': userId,
-        'payload': {'type': 'declare_end'},
-        'seq': null,
-        'meta': null,
-      },
-    );
-  }
-
-  Future<void> drawTile({
-    required String room,
-    required String userId,
-  }) {
-    return sendAction(
-      room: room,
-      action: {
-        'id': _actionId(userId),
-        'user_id': userId,
-        'payload': {'type': 'draw_tile'},
-        'seq': null,
-        'meta': null,
-      },
-    );
-  }
-
   Future<Map<String, dynamic>> _emitAndWait({
     required String emitEvent,
     required Object? payload,
@@ -409,11 +262,6 @@ class LobbyApi {
     for (final listener in List<void Function(Map<String, dynamic>)>.from(_messageListeners)) {
       listener(payload);
     }
-  }
-
-  String _actionId(String userId) {
-    final ts = DateTime.now().microsecondsSinceEpoch;
-    return 'a-$userId-$ts';
   }
 
   Map<String, dynamic> _asMap(dynamic data) {
