@@ -169,7 +169,7 @@ impl AcquireState {
         out
     }
 
-    fn classify_placement(&self, pos: &str) -> PlacementKind {
+    pub(crate) fn classify_placement(&self, pos: &str) -> PlacementKind {
         let mut company_ids = HashSet::new();
         let mut has_independent = false;
         let mut has_adjacent = false;
@@ -336,10 +336,10 @@ impl AcquireState {
             .insert(company.to_string(), c);
     }
 
-    fn payout_merge_bonus_for_company(&mut self, loser_company: &str) {
+    fn payout_merge_bonus_for_company(&mut self, loser_company: &str) -> Vec<(String, i64)> {
         let price = self.company_share_price(loser_company);
         if price <= 0 {
-            return;
+            return vec![];
         }
 
         let mut holders: Vec<(String, i64)> = self
@@ -349,8 +349,10 @@ impl AcquireState {
             .filter(|(_, n)| *n > 0)
             .collect();
         if holders.is_empty() {
-            return;
+            return vec![];
         }
+
+        let mut payouts = Vec::new();
 
         holders.sort_by(|a, b| match b.1.cmp(&a.1) {
             Ordering::Equal => a.0.cmp(&b.0),
@@ -370,30 +372,35 @@ impl AcquireState {
             let pool = first_bonus + second_bonus;
             let each = pool / first_group.len() as i64;
             for user in first_group {
-                *self.players.entry(user).or_insert(0) += each;
+                *self.players.entry(user.clone()).or_insert(0) += each;
+                payouts.push((user, each));
             }
-            return;
+            return payouts;
         }
 
         let first_user = holders[0].0.clone();
-        *self.players.entry(first_user).or_insert(0) += first_bonus;
+        *self.players.entry(first_user.clone()).or_insert(0) += first_bonus;
+        payouts.push((first_user, first_bonus));
 
         let second_shares = holders.iter().find(|(_, n)| *n < first_shares).map(|(_, n)| *n);
         let Some(second_shares) = second_shares else {
-            return;
+            return payouts;
         };
         let second_group: Vec<String> = holders
             .iter()
             .filter_map(|(u, n)| if *n == second_shares { Some(u.clone()) } else { None })
             .collect();
         if second_group.is_empty() {
-            return;
+            return payouts;
         }
 
         let each = second_bonus / second_group.len() as i64;
         for user in second_group {
-            *self.players.entry(user).or_insert(0) += each;
+            *self.players.entry(user.clone()).or_insert(0) += each;
+            payouts.push((user, each));
         }
+
+        payouts
     }
 
     fn build_merge_settlement(&self, placed_pos: &str, candidates: &[String], survivor: &str) -> MergeSettlement {
@@ -600,19 +607,28 @@ impl Game for AcquireGame {
             }
         };
 
+        let mut game_started = false;
         if !s.players.contains_key(&user) {
             s.players.insert(user.clone(), 6000);
             s.shares.insert(user.clone(), HashMap::new());
             s.player_tiles.insert(user.clone(), HashSet::new());
             s.refill_player_tiles(&user, 6);
             s.turn_order.push(user.clone());
+            if s.turn_order.len() == 2 {
+                game_started = true;
+            }
         }
 
         ActionResult::Ok {
             events: vec![],
             broadcasts: vec![Outbound {
                 target: OutboundTarget::All,
-                payload: json!({"type":"state","state": s.snapshot_state(), "room": _ctx.room_id}),
+                payload: json!({
+                    "type":"state",
+                    "state": s.snapshot_state(),
+                    "room": _ctx.room_id,
+                    "event": if game_started { "game_started" } else { "player_joined" }
+                }),
             }],
         }
     }
@@ -714,14 +730,27 @@ impl Game for AcquireGame {
 
                     let placement = s.classify_placement(pos);
 
+                    let hand_before = s
+                        .player_tiles
+                        .get(&action.user_id)
+                        .map(HashSet::len)
+                        .unwrap_or(0);
                     s.tiles.insert(pos.to_string());
                     if let Some(hand) = s.player_tiles.get_mut(&action.user_id) {
                         hand.remove(pos);
                     }
                     s.refill_player_tiles(&action.user_id, 6);
+                    let hand_after = s
+                        .player_tiles
+                        .get(&action.user_id)
+                        .map(HashSet::len)
+                        .unwrap_or(0);
+                    let hand_after_play = hand_before.saturating_sub(1);
+                    let refilled = hand_after > hand_after_play;
                     s.moves.push((action.user_id.clone(), pos.to_string()));
 
                     let mut placement_label = "isolated".to_string();
+                    let mut event = "place_ok".to_string();
                     match &placement {
                         PlacementKind::Isolated => {
                             s.independent_tiles.insert(pos.to_string());
@@ -744,6 +773,7 @@ impl Game for AcquireGame {
                                 AcquireState::refresh_company_safety(company);
                             }
                             placement_label = format!("expand:{}", company_id);
+                            event = "company_expanded".to_string();
                         }
                         PlacementKind::FoundCandidate => {
                             let Some(_any_company) = s.first_inactive_company() else {
@@ -763,7 +793,6 @@ impl Game for AcquireGame {
                         PlacementKind::Merge(_) => {}
                     }
 
-                    let mut event = "place_ok".to_string();
                     if let PlacementKind::Merge(merge_targets) = placement {
                         let allowed = match s.allowed_merge_survivors(&merge_targets) {
                             Ok(v) => v,
@@ -774,8 +803,15 @@ impl Game for AcquireGame {
 
                         if allowed.len() == 1 {
                             let survivor = allowed[0].clone();
+                            let mut bonus_paid = vec![];
                             for loser in merge_targets.iter().filter(|cid| *cid != &survivor) {
-                                s.payout_merge_bonus_for_company(loser);
+                                let payouts = s.payout_merge_bonus_for_company(loser);
+                                if !payouts.is_empty() {
+                                    bonus_paid.push(json!({
+                                        "company": loser,
+                                        "payouts": payouts.into_iter().map(|(user, amount)| json!({"user": user, "amount": amount})).collect::<Vec<Value>>()
+                                    }));
+                                }
                             }
                             s.merge_settlement = Some(
                                 s.build_merge_settlement(pos, &merge_targets, &survivor),
@@ -787,6 +823,9 @@ impl Game for AcquireGame {
                                 s.merge_settlement = None;
                                 s.phase = "buy".to_string();
                                 placement_label = format!("merge:{}", survivor);
+                                if !bonus_paid.is_empty() {
+                                    event = "bonus_paid".to_string();
+                                }
                             } else {
                                 s.phase = "merge_stock_decision".to_string();
                                 placement_label = format!("merge_pending_stock:{}", survivor);
@@ -821,9 +860,21 @@ impl Game for AcquireGame {
                         target: OutboundTarget::All,
                         payload,
                     };
+                    let mut broadcasts = vec![out];
+                    if refilled {
+                        broadcasts.push(Outbound {
+                            target: OutboundTarget::User(action.user_id.clone()),
+                            payload: json!({
+                                "type": "hand_refilled",
+                                "user": action.user_id,
+                                "hand_count": hand_after,
+                                "remaining": s.tile_bag.len(),
+                            }),
+                        });
+                    }
                     return ActionResult::Ok {
                         events: vec![],
-                        broadcasts: vec![out],
+                        broadcasts,
                     };
                 }
                 ActionResult::Err(game::GameError::Invalid("missing pos".into()))
@@ -1039,8 +1090,15 @@ impl Game for AcquireGame {
                 }
 
                 s.merge_context = None;
+                let mut bonus_paid = vec![];
                 for loser in ctx.candidates.iter().filter(|cid| *cid != &survivor) {
-                    s.payout_merge_bonus_for_company(loser);
+                    let payouts = s.payout_merge_bonus_for_company(loser);
+                    if !payouts.is_empty() {
+                        bonus_paid.push(json!({
+                            "company": loser,
+                            "payouts": payouts.into_iter().map(|(user, amount)| json!({"user": user, "amount": amount})).collect::<Vec<Value>>()
+                        }));
+                    }
                 }
                 s.merge_settlement = Some(s.build_merge_settlement(
                     &ctx.placed_pos,
@@ -1067,7 +1125,8 @@ impl Game for AcquireGame {
                             "state": s.snapshot_state(),
                             "event": "merge_resolved",
                             "survivor": survivor,
-                            "needs_stock_decision": s.phase == "merge_stock_decision"
+                            "needs_stock_decision": s.phase == "merge_stock_decision",
+                            "bonus_paid": bonus_paid
                         }),
                     }],
                 }
@@ -1118,6 +1177,11 @@ impl Game for AcquireGame {
                 }
 
                 let current_holding = s.share_count(&action.user_id, &company);
+                let mut stock_event = "merge_stock_decision_applied".to_string();
+                let mut sold_shares = 0i64;
+                let mut sold_cash = 0i64;
+                let mut traded_old = 0i64;
+                let mut traded_new = 0i64;
                 if current_holding <= 0 {
                     if let Some(m) = s.merge_settlement.as_mut()
                         && let Some(set) = m.pending.get_mut(&action.user_id)
@@ -1127,7 +1191,11 @@ impl Game for AcquireGame {
                 } else {
                     match mode {
                         "hold" => {
-                            // keep as is
+                            if let Some(m) = s.merge_settlement.as_mut()
+                                && let Some(set) = m.pending.get_mut(&action.user_id)
+                            {
+                                set.remove(&company);
+                            }
                         }
                         "sell" => {
                             let req_qty = action
@@ -1139,7 +1207,10 @@ impl Game for AcquireGame {
                                 .min(current_holding);
                             let price = s.company_share_price(&company);
                             s.set_share_count(&action.user_id, &company, current_holding - req_qty);
-                            *s.players.entry(action.user_id.clone()).or_insert(0) += req_qty * price;
+                            sold_shares = req_qty;
+                            sold_cash = req_qty * price;
+                            *s.players.entry(action.user_id.clone()).or_insert(0) += sold_cash;
+                            stock_event = "shares_sold".to_string();
                         }
                         "trade" => {
                             let req_qty = action
@@ -1151,6 +1222,11 @@ impl Game for AcquireGame {
                                 .min(current_holding);
                             let tradable_old = req_qty - (req_qty % 2);
                             let new_shares = tradable_old / 2;
+                            if new_shares <= 0 {
+                                return ActionResult::Err(game::GameError::Invalid(
+                                    "trade_requires_at_least_two_shares".into(),
+                                ));
+                            }
                             let survivor = settlement.survivor.clone();
                             let pool = s.stock_pool.get(&survivor).copied().unwrap_or(0);
                             if pool < new_shares {
@@ -1163,6 +1239,9 @@ impl Game for AcquireGame {
                             if let Some(p) = s.stock_pool.get_mut(&survivor) {
                                 *p -= new_shares;
                             }
+                            traded_old = tradable_old;
+                            traded_new = new_shares;
+                            stock_event = "shares_converted".to_string();
                         }
                         _ => {
                             return ActionResult::Err(game::GameError::Invalid(
@@ -1171,14 +1250,16 @@ impl Game for AcquireGame {
                         }
                     }
 
-                    if let Some(m) = s.merge_settlement.as_mut()
+                    let should_clear_pending = s.share_count(&action.user_id, &company) <= 0;
+                    if should_clear_pending
+                        && let Some(m) = s.merge_settlement.as_mut()
                         && let Some(set) = m.pending.get_mut(&action.user_id)
                     {
                         set.remove(&company);
                     }
                 }
 
-                let mut event = "merge_stock_decision_applied".to_string();
+                let mut event = stock_event;
                 if s.merge_settlement_complete() {
                     let final_settlement = s.merge_settlement.clone().expect("checked some");
                     if let Err(e) = s.apply_merge(
@@ -1201,7 +1282,12 @@ impl Game for AcquireGame {
                             "type": "state",
                             "state": s.snapshot_state(),
                             "event": event,
-                            "by": action.user_id
+                            "by": action.user_id,
+                            "company": company,
+                            "sold_shares": sold_shares,
+                            "sold_cash": sold_cash,
+                            "traded_old_shares": traded_old,
+                            "traded_new_shares": traded_new,
                         }),
                     }],
                 }
@@ -1227,15 +1313,26 @@ impl Game for AcquireGame {
 
                 ActionResult::Ok {
                     events: vec![],
-                    broadcasts: vec![Outbound {
-                        target: OutboundTarget::All,
-                        payload: json!({
-                            "type": "state",
-                            "state": s.snapshot_state(),
-                            "event": "final_scored",
-                            "winner": winner
-                        }),
-                    }],
+                    broadcasts: vec![
+                        Outbound {
+                            target: OutboundTarget::All,
+                            payload: json!({
+                                "type": "state",
+                                "state": s.snapshot_state(),
+                                "event": "end_declared",
+                                "by": action.user_id,
+                            }),
+                        },
+                        Outbound {
+                            target: OutboundTarget::All,
+                            payload: json!({
+                                "type": "state",
+                                "state": s.snapshot_state(),
+                                "event": "final_scored",
+                                "winner": winner
+                            }),
+                        },
+                    ],
                 }
             }
             "draw_tile" => {

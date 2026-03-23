@@ -992,4 +992,171 @@ mod tests {
             _ => panic!("expected tile_not_in_hand"),
         }
     }
+
+    #[tokio::test]
+    async fn merge_stock_decision_allows_partial_then_finalize() {
+        let game = AcquireGame::new();
+        let ctx = test_ctx();
+        let mut state = setup_merge_stock_decision_state(&game, &ctx).await;
+
+        let sell_one = game
+            .handle_action(
+                &ctx,
+                state.as_mut(),
+                make_action(
+                    "u2",
+                    json!({"type":"merge_stock_decision","company":"Sackson","mode":"sell","shares":1}),
+                ),
+            )
+            .await;
+        assert!(matches!(sell_one, ActionResult::Ok { .. }));
+
+        let s_mid = downcast_state(state.as_ref());
+        assert_eq!(s_mid.phase, "merge_stock_decision");
+        let remaining = s_mid
+            .shares
+            .get("u2")
+            .and_then(|m| m.get("Sackson"))
+            .copied()
+            .unwrap_or(0);
+        assert_eq!(remaining, 1);
+
+        let hold_rest = game
+            .handle_action(
+                &ctx,
+                state.as_mut(),
+                make_action(
+                    "u2",
+                    json!({"type":"merge_stock_decision","company":"Sackson","mode":"hold"}),
+                ),
+            )
+            .await;
+        assert!(matches!(hold_rest, ActionResult::Ok { .. }));
+
+        let s = downcast_state(state.as_ref());
+        assert_eq!(s.phase, "buy");
+        assert!(s.companies.contains_key("Worldwide"));
+        assert!(!s.companies.contains_key("Sackson"));
+    }
+
+    #[tokio::test]
+    async fn classify_placement_covers_four_outcomes() {
+        let game = AcquireGame::new();
+        let mut state = game.create_initial_state(None).await;
+        let s = downcast_state_mut(state.as_mut());
+
+        // isolated
+        assert!(matches!(s.classify_placement("8H"), PlacementKind::Isolated));
+
+        // founding candidate: adjacent to independent tiles and no adjacent company.
+        for pos in ["5D", "5F"] {
+            s.tiles.insert(pos.to_string());
+            s.independent_tiles.insert(pos.to_string());
+        }
+        assert!(matches!(
+            s.classify_placement("5E"),
+            PlacementKind::FoundCandidate
+        ));
+
+        // expand: adjacent to exactly one company.
+        s.tiles.insert("9D".to_string());
+        s.tile_company
+            .insert("9D".to_string(), "Worldwide".to_string());
+        assert!(matches!(
+            s.classify_placement("9E"),
+            PlacementKind::Expand(ref cid) if cid == "Worldwide"
+        ));
+
+        // merge: adjacent to two different companies.
+        for (pos, cid) in [("2D", "Worldwide"), ("2F", "Sackson")] {
+            s.tiles.insert(pos.to_string());
+            s.tile_company.insert(pos.to_string(), cid.to_string());
+        }
+        assert!(matches!(
+            s.classify_placement("2E"),
+            PlacementKind::Merge(ref cids) if cids.len() == 2 && cids.iter().any(|c| c == "Worldwide") && cids.iter().any(|c| c == "Sackson")
+        ));
+    }
+
+    #[tokio::test]
+    async fn snapshot_restore_keeps_turn_and_phase_consistent() {
+        let game = AcquireGame::new();
+        let mut state = game.create_initial_state(None).await;
+        let ctx = test_ctx();
+
+        let _ = game.on_join(&ctx, state.as_mut(), "u1".to_string()).await;
+        let _ = game.on_join(&ctx, state.as_mut(), "u2".to_string()).await;
+
+        place_and_buy_zero(&game, &ctx, &mut state, "u1", "1A").await;
+
+        let before = downcast_state(state.as_ref());
+        let before_current = before.current_player().map(str::to_string);
+        let before_phase = before.phase.clone();
+        let before_turn = before.turn_no;
+        let before_tiles = before.tiles.clone();
+
+        let snapshot = state
+            .snapshot()
+            .expect("snapshot should serialize acquire state");
+
+        let mut restored = game.create_initial_state(None).await;
+        restored
+            .restore(&snapshot)
+            .expect("restore should load acquire state snapshot");
+
+        let after = downcast_state(restored.as_ref());
+        assert_eq!(after.current_player(), before_current.as_deref());
+        assert_eq!(after.phase, before_phase);
+        assert_eq!(after.turn_no, before_turn);
+        assert_eq!(after.tiles, before_tiles);
+    }
+
+    #[tokio::test]
+    async fn declare_end_bonus_distribution_handles_second_place_tie() {
+        let game = AcquireGame::new();
+        let mut state = game.create_initial_state(None).await;
+        let ctx = test_ctx();
+
+        let _ = game.on_join(&ctx, state.as_mut(), "u1".to_string()).await;
+        let _ = game.on_join(&ctx, state.as_mut(), "u2".to_string()).await;
+        let _ = game.on_join(&ctx, state.as_mut(), "u3".to_string()).await;
+
+        {
+            let s = downcast_state_mut(state.as_mut());
+            let mut tiles = HashSet::new();
+            for i in 0..41 {
+                tiles.insert(format!("{}A", i + 1));
+            }
+            s.companies.insert(
+                "Worldwide".to_string(),
+                CompanyState {
+                    id: "Worldwide".to_string(),
+                    tiles,
+                    safe: true,
+                },
+            );
+
+            s.set_share_count("u1", "Worldwide", 4);
+            s.set_share_count("u2", "Worldwide", 2);
+            s.set_share_count("u3", "Worldwide", 2);
+        }
+
+        let res = game
+            .handle_action(
+                &ctx,
+                state.as_mut(),
+                make_action("u1", json!({"type":"declare_end"})),
+            )
+            .await;
+        assert!(matches!(res, ActionResult::Ok { .. }));
+
+        let s = downcast_state(state.as_ref());
+        // Worldwide size 41 => price 1000.
+        // u1: 6000 + 10000 + 4000 = 20000
+        // u2: 6000 + 2500 + 2000 = 10500
+        // u3: 6000 + 2500 + 2000 = 10500
+        assert_eq!(s.players.get("u1").copied().unwrap_or(0), 20000);
+        assert_eq!(s.players.get("u2").copied().unwrap_or(0), 10500);
+        assert_eq!(s.players.get("u3").copied().unwrap_or(0), 10500);
+    }
 }

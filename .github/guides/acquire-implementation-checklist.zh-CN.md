@@ -118,17 +118,17 @@
 
 建议标准事件（待补）：
 
-- [ ] game_started
+- [x] game_started
 - [x] tile_placed（由 place_ok 承载）
 - [x] company_founded
-- [ ] company_expanded（当前由 place_ok + placement 承载，未拆独立事件）
+- [x] company_expanded
 - [x] merge_started（由 merge_pending 承载）
 - [x] survivor_selected（由 merge_resolved.survivor 承载）
-- [ ] bonus_paid
-- [ ] shares_converted
-- [ ] shares_sold
-- [ ] hand_refilled（当前由 state 快照可推导，未拆独立事件）
-- [ ] end_declared
+- [x] bonus_paid
+- [x] shares_converted
+- [x] shares_sold
+- [x] hand_refilled
+- [x] end_declared
 - [x] final_scored
 
 ## 6. 测试矩阵（优先级）
@@ -155,39 +155,46 @@
 
 下一批必须补：
 
-- [ ] 邻接分类测试（4 类）
+- [x] 邻接分类测试（4 类）
 - [x] 安全公司不可被并
 - [x] 平规模由当前玩家选择存续
-- [ ] 头名/次名奖金平手分配（覆盖仍可加强）
+- [x] 头名/次名奖金平手分配（覆盖已强化）
 - [x] 股票出售与兑换约束
 - [x] 终局触发与清算现金排名
-- [ ] 快照恢复后回合一致性
+- [x] 快照恢复后回合一致性
 
 ## 7. 建议实施顺序（可直接执行）
 
-1. merge_stock_decision 细粒度化
+1. merge_stock_decision 细粒度化 ✅
 - 支持同一被并公司在一个结算窗口内混合 sell/trade/hold（而非一次性决策）。
 
 2. 开局规则对齐
 - 对齐规则书第 1、2 节的先手决定与开局流程（当前仍是最小闭环实现）。
 
-3. 事件语义补齐
+3. 事件语义补齐 ✅
 - 视客户端需求拆分 bonus_paid / shares_converted / shares_sold / hand_refilled / end_declared。
 
-4. 测试补齐
-- 强化奖金平手分配覆盖。
-- 增加快照恢复后一致性用例。
+4. 测试补齐（已完成两项，长局补牌待补）
+- 强化奖金平手分配覆盖 ✅
+- 增加快照恢复后一致性用例 ✅
 - 增加牌袋耗尽与长局补牌一致性用例。
 
 ## 8. 本周最小里程碑（建议）
 
-- M1: 完成 merge_stock_decision 细粒度化。
+- M1: 完成 merge_stock_decision 细粒度化。✅
 - M2: 完成开局规则（先手/初始流程）对齐。
-- M3: 完成事件拆分并与客户端约定字段。
-- M4: 完成快照恢复与长局补牌回归测试。
+- M3: 完成事件拆分并与客户端约定字段。✅（服务端事件已补齐）
+- M4: 完成快照恢复与长局补牌回归测试。（快照恢复✅；长局补牌待补）
 
 ## 9. 本次收尾状态（2026-03-20）
 
 - [x] 并购插件单文件已拆分为模块化结构（lib/model/engine/tests）。
 - [x] 重构后回归测试通过（acquire_plugin: 18 passed / 0 failed）。
 - [x] 交接文档已同步到模块化路径。
+
+## 10. 今日收尾状态（2026-03-23）
+
+- [x] merge_stock_decision 已支持同一被并公司分步处理（sell/trade/hold 混合，非一次性决策）。
+- [x] 事件语义已补齐：game_started/company_expanded/bonus_paid/shares_sold/shares_converted/hand_refilled/end_declared。
+- [x] 测试新增 4 项：邻接四分类、分步并购股票决策、快照恢复回合一致性、奖金平手分配强化。
+- [x] acquire_plugin 回归通过（22 passed / 0 failed）。
