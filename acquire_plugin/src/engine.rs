@@ -1,17 +1,18 @@
 use async_trait::async_trait;
+use rand::seq::SliceRandom;
 use serde_json::Value;
 use serde_json::json;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::OnceLock;
 
-use boardgames_server::game::{
-    self, Action, ActionCtx, ActionResult, Game, GameDescriptor, GameState, Outbound,
-    OutboundTarget,
-};
 use crate::{
     AcquireGame, AcquireState, BOARD_MAX_COL, BOARD_MAX_ROW, COMPANY_IDS, CompanyState,
     FinalStanding, FoundingContext, MergeContext, MergeSettlement, PlacementKind,
+};
+use boardgames_server::game::{
+    self, Action, ActionCtx, ActionResult, Game, GameDescriptor, GameState, Outbound,
+    OutboundTarget,
 };
 
 impl AcquireState {
@@ -45,13 +46,16 @@ impl AcquireState {
     }
 
     fn build_tile_bag() -> VecDeque<String> {
-        let mut bag = VecDeque::new();
+        let mut all_tiles = Vec::new();
         for col in 1..=BOARD_MAX_COL {
             for row in 1..=BOARD_MAX_ROW {
-                bag.push_back(Self::encode_pos(col, row));
+                all_tiles.push(Self::encode_pos(col, row));
             }
         }
-        bag
+
+        let mut rng = rand::thread_rng();
+        all_tiles.shuffle(&mut rng);
+        VecDeque::from(all_tiles)
     }
 
     fn tile_in_any_hand(&self, pos: &str) -> bool {
@@ -73,11 +77,7 @@ impl AcquireState {
     }
 
     fn refill_player_tiles(&mut self, user: &str, target: usize) {
-        let mut hand_size = self
-            .player_tiles
-            .get(user)
-            .map(HashSet::len)
-            .unwrap_or(0);
+        let mut hand_size = self.player_tiles.get(user).map(HashSet::len).unwrap_or(0);
         while hand_size < target {
             if self.draw_tile_for_user(user).is_none() {
                 break;
@@ -362,7 +362,13 @@ impl AcquireState {
         let first_shares = holders[0].1;
         let first_group: Vec<String> = holders
             .iter()
-            .filter_map(|(u, n)| if *n == first_shares { Some(u.clone()) } else { None })
+            .filter_map(|(u, n)| {
+                if *n == first_shares {
+                    Some(u.clone())
+                } else {
+                    None
+                }
+            })
             .collect();
 
         let first_bonus = 10 * price;
@@ -382,13 +388,22 @@ impl AcquireState {
         *self.players.entry(first_user.clone()).or_insert(0) += first_bonus;
         payouts.push((first_user, first_bonus));
 
-        let second_shares = holders.iter().find(|(_, n)| *n < first_shares).map(|(_, n)| *n);
+        let second_shares = holders
+            .iter()
+            .find(|(_, n)| *n < first_shares)
+            .map(|(_, n)| *n);
         let Some(second_shares) = second_shares else {
             return payouts;
         };
         let second_group: Vec<String> = holders
             .iter()
-            .filter_map(|(u, n)| if *n == second_shares { Some(u.clone()) } else { None })
+            .filter_map(|(u, n)| {
+                if *n == second_shares {
+                    Some(u.clone())
+                } else {
+                    None
+                }
+            })
             .collect();
         if second_group.is_empty() {
             return payouts;
@@ -403,10 +418,21 @@ impl AcquireState {
         payouts
     }
 
-    fn build_merge_settlement(&self, placed_pos: &str, candidates: &[String], survivor: &str) -> MergeSettlement {
+    fn build_merge_settlement(
+        &self,
+        placed_pos: &str,
+        candidates: &[String],
+        survivor: &str,
+    ) -> MergeSettlement {
         let losers: Vec<String> = candidates
             .iter()
-            .filter_map(|cid| if cid != survivor { Some(cid.clone()) } else { None })
+            .filter_map(|cid| {
+                if cid != survivor {
+                    Some(cid.clone())
+                } else {
+                    None
+                }
+            })
             .collect();
 
         let mut pending: HashMap<String, HashSet<String>> = HashMap::new();
@@ -439,18 +465,15 @@ impl AcquireState {
     }
 
     fn can_declare_end(&self) -> bool {
-        let any_41 = self
-            .companies
-            .values()
-            .any(|c| c.tiles.len() >= 41);
+        let any_41 = self.companies.values().any(|c| c.tiles.len() >= 41);
         if any_41 {
             return true;
         }
 
         let has_active = !self.companies.is_empty();
         let all_safe = self.companies.values().all(|c| c.safe);
-        let no_new_company_possible = self.first_inactive_company().is_none()
-            || !self.has_founding_opportunity_on_board();
+        let no_new_company_possible =
+            self.first_inactive_company().is_none() || !self.has_founding_opportunity_on_board();
         has_active && all_safe && no_new_company_possible
     }
 
@@ -494,7 +517,12 @@ impl AcquireState {
         self.phase = "game_over".to_string();
     }
 
-    fn apply_merge(&mut self, survivor: &str, candidates: &[String], placed_pos: &str) -> anyhow::Result<()> {
+    fn apply_merge(
+        &mut self,
+        survivor: &str,
+        candidates: &[String],
+        placed_pos: &str,
+    ) -> anyhow::Result<()> {
         if !self.companies.contains_key(survivor) {
             return Err(anyhow::anyhow!("survivor_not_found"));
         }
@@ -663,9 +691,7 @@ impl Game for AcquireGame {
         }
 
         if !s.can_start() {
-            return ActionResult::Err(game::GameError::Invalid(
-                "not_enough_players_min_2".into(),
-            ));
+            return ActionResult::Err(game::GameError::Invalid("not_enough_players_min_2".into()));
         }
         if s.game_over {
             return ActionResult::Err(game::GameError::Invalid("game_already_over".into()));
@@ -674,9 +700,7 @@ impl Game for AcquireGame {
         let current_player = match s.current_player() {
             Some(p) => p.to_string(),
             None => {
-                return ActionResult::Err(game::GameError::State(
-                    "missing_current_player".into(),
-                ));
+                return ActionResult::Err(game::GameError::State("missing_current_player".into()));
             }
         };
 
@@ -692,9 +716,7 @@ impl Game for AcquireGame {
             .unwrap_or("");
 
         if ty != "merge_stock_decision" && action.user_id != current_player {
-            return ActionResult::Err(game::GameError::Invalid(
-                "not_your_turn".into(),
-            ));
+            return ActionResult::Err(game::GameError::Invalid("not_your_turn".into()));
         }
 
         match ty {
@@ -813,12 +835,13 @@ impl Game for AcquireGame {
                                     }));
                                 }
                             }
-                            s.merge_settlement = Some(
-                                s.build_merge_settlement(pos, &merge_targets, &survivor),
-                            );
+                            s.merge_settlement =
+                                Some(s.build_merge_settlement(pos, &merge_targets, &survivor));
                             if s.merge_settlement_complete() {
                                 if let Err(e) = s.apply_merge(&survivor, &merge_targets, pos) {
-                                    return ActionResult::Err(game::GameError::State(e.to_string()));
+                                    return ActionResult::Err(game::GameError::State(
+                                        e.to_string(),
+                                    ));
                                 }
                                 s.merge_settlement = None;
                                 s.phase = "buy".to_string();
@@ -889,16 +912,22 @@ impl Game for AcquireGame {
                 let mut purchases: Vec<(String, i64)> = Vec::new();
 
                 let Some(raw_purchases) = action.payload.get("purchases") else {
-                    return ActionResult::Err(game::GameError::Invalid("invalid_buy_purchases".into()));
+                    return ActionResult::Err(game::GameError::Invalid(
+                        "invalid_buy_purchases".into(),
+                    ));
                 };
                 let Some(map) = raw_purchases.as_object() else {
-                    return ActionResult::Err(game::GameError::Invalid("invalid_buy_purchases".into()));
+                    return ActionResult::Err(game::GameError::Invalid(
+                        "invalid_buy_purchases".into(),
+                    ));
                 };
 
                 for (cid, qty_value) in map {
                     let qty = qty_value.as_i64().unwrap_or(-1);
                     if qty < 0 {
-                        return ActionResult::Err(game::GameError::Invalid("invalid shares".into()));
+                        return ActionResult::Err(game::GameError::Invalid(
+                            "invalid shares".into(),
+                        ));
                     }
                     if qty == 0 {
                         continue;
@@ -930,7 +959,9 @@ impl Game for AcquireGame {
                 for (cid, qty) in &purchases {
                     let unit_price = s.company_share_price(cid);
                     if unit_price <= 0 {
-                        return ActionResult::Err(game::GameError::Invalid("company_not_tradeable".into()));
+                        return ActionResult::Err(game::GameError::Invalid(
+                            "company_not_tradeable".into(),
+                        ));
                     }
                     total_cost += qty * unit_price;
                 }
@@ -1090,9 +1121,7 @@ impl Game for AcquireGame {
                     .unwrap_or("")
                     .to_string();
                 if survivor.is_empty() {
-                    return ActionResult::Err(game::GameError::Invalid(
-                        "missing_survivor".into(),
-                    ));
+                    return ActionResult::Err(game::GameError::Invalid("missing_survivor".into()));
                 }
                 if !ctx.allowed_survivors.iter().any(|x| x == &survivor) {
                     return ActionResult::Err(game::GameError::Invalid(
@@ -1111,11 +1140,8 @@ impl Game for AcquireGame {
                         }));
                     }
                 }
-                s.merge_settlement = Some(s.build_merge_settlement(
-                    &ctx.placed_pos,
-                    &ctx.candidates,
-                    &survivor,
-                ));
+                s.merge_settlement =
+                    Some(s.build_merge_settlement(&ctx.placed_pos, &ctx.candidates, &survivor));
 
                 if s.merge_settlement_complete() {
                     if let Err(e) = s.apply_merge(&survivor, &ctx.candidates, &ctx.placed_pos) {
@@ -1245,7 +1271,11 @@ impl Game for AcquireGame {
                                     "not_enough_stock_pool_for_trade".into(),
                                 ));
                             }
-                            s.set_share_count(&action.user_id, &company, current_holding - tradable_old);
+                            s.set_share_count(
+                                &action.user_id,
+                                &company,
+                                current_holding - tradable_old,
+                            );
                             *s.share_mut(&action.user_id, &survivor) += new_shares;
                             if let Some(p) = s.stock_pool.get_mut(&survivor) {
                                 *p -= new_shares;
@@ -1353,16 +1383,12 @@ impl Game for AcquireGame {
                     .map(HashSet::len)
                     .unwrap_or(0);
                 if hand_size >= 6 {
-                    return ActionResult::Err(game::GameError::Invalid(
-                        "hand_already_full".into(),
-                    ));
+                    return ActionResult::Err(game::GameError::Invalid("hand_already_full".into()));
                 }
 
                 let drawn = s.draw_tile_for_user(&action.user_id);
                 let Some(pos) = drawn else {
-                    return ActionResult::Err(game::GameError::Invalid(
-                        "tile_bag_empty".into(),
-                    ));
+                    return ActionResult::Err(game::GameError::Invalid("tile_bag_empty".into()));
                 };
 
                 ActionResult::Ok {
@@ -1385,4 +1411,3 @@ impl Game for AcquireGame {
 }
 
 // (no extra downcast helpers needed; GameState extends Any in the server crate)
-
