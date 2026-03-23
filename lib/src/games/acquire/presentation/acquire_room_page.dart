@@ -30,9 +30,11 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
 
   final Map<String, int> _buyPlan = {};
   int _mergeShares = 2;
-  String? _hoveredTile;
-  String? _hoveredCompanyId;
+  String? _pinnedTile;
+  String? _pinnedCompanyId;
   String? _lastAutoPassBuyKey;
+  bool? _roomStateCollapsed = false;
+  bool? _roomStateAutoCollapsed = false;
 
   @override
   void initState() {
@@ -54,6 +56,17 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     widget.session.api.removeBroadcastListener(_onBroadcast);
     widget.session.api.removeMessageListener(_onMessage);
     super.dispose();
+  }
+
+  String? get _activeInfoTile => _pinnedTile;
+
+  String? get _activeInfoCompanyId => _pinnedCompanyId;
+
+  void _pinBoardInfo(String tile, String? companyId) {
+    setState(() {
+      _pinnedTile = tile;
+      _pinnedCompanyId = companyId;
+    });
   }
 
   Future<void> _ensureRoomReady() async {
@@ -117,7 +130,12 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     _readyCount = _asInt(readyState['ready_count']);
     _playerCount = _asInt(readyState['player_count']);
     _minPlayers = _asInt(readyState['min_players']);
-    _roomStarted = readyState['started'] == true;
+    final nextRoomStarted = readyState['started'] == true;
+    if (nextRoomStarted && !_roomStarted && !(_roomStateAutoCollapsed ?? false)) {
+      _roomStateCollapsed = true;
+      _roomStateAutoCollapsed = true;
+    }
+    _roomStarted = nextRoomStarted;
     _isReady = _readyUsers.contains(widget.session.userId);
   }
 
@@ -306,9 +324,10 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildRoomStateCard(theme, envelope, state, isMyTurn, canActNow, myPendingMergeCompanies),
-                const SizedBox(height: 8),
                 _buildRoomControlBar(),
+                const SizedBox(height: 8),
+                if (!(_roomStateCollapsed ?? false))
+                  _buildRoomStateCard(theme, envelope, state, isMyTurn, canActNow, myPendingMergeCompanies),
                 const SizedBox(height: 12),
                 _buildWorkspace(theme, state, isMyTurn, canActNow, myPendingMergeCompanies),
               ],
@@ -320,10 +339,20 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
   }
 
   Widget _buildRoomControlBar() {
+    final collapsed = _roomStateCollapsed ?? false;
     return Wrap(
       spacing: 8,
       runSpacing: 8,
       children: [
+        OutlinedButton.icon(
+          onPressed: () {
+            setState(() {
+              _roomStateCollapsed = !(_roomStateCollapsed ?? false);
+            });
+          },
+          icon: Icon(collapsed ? Icons.unfold_more : Icons.unfold_less),
+          label: Text(collapsed ? 'Expand Room State' : 'Collapse Room State'),
+        ),
         OutlinedButton(
           onPressed: _leaving || _busy || _settingReady || _roomStarted ? null : () => _setReady(!_isReady),
           child: Text(
@@ -408,6 +437,8 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
 
   Widget _buildBoardCard(ThemeData theme, AcquireStateSnapshot? state, bool isMyTurn) {
     final canPlace = state != null && _roomStarted && isMyTurn && state.phase == 'place' && !_busy && !_leaving;
+    final activeTile = _activeInfoTile;
+    final activeCompanyId = _activeInfoCompanyId;
 
     return Card(
       child: Padding(
@@ -422,14 +453,14 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
               children: [
                 Text('Board', style: theme.textTheme.titleLarge),
                 if (state != null) Text('placed=${state.tiles.length}', style: theme.textTheme.bodySmall),
-                if (_hoveredTile != null)
+                if (activeTile != null)
                   Text(
-                    'hover_tile=$_hoveredTile',
+                    'selected_tile=$activeTile',
                     style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF344054)),
                   ),
-                if (_hoveredCompanyId != null && state?.companies.containsKey(_hoveredCompanyId) == true)
+                if (activeCompanyId != null && state?.companies.containsKey(activeCompanyId) == true)
                   Text(
-                    'hover_company=$_hoveredCompanyId (${state!.companies[_hoveredCompanyId]!.tiles.length} tiles)',
+                    'selected_company=$activeCompanyId (${state!.companies[activeCompanyId]!.tiles.length} tiles)',
                     style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF0A7E8C)),
                   ),
               ],
@@ -445,12 +476,12 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
             if (state != null) ...[
               const SizedBox(height: 10),
               Text(
-                'Tip: hover any tile of a company to highlight the whole company block.',
+                'Tip: click tile to show info below.',
                 style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF667085)),
               ),
-              if (_hoveredCompanyId != null && state.companies.containsKey(_hoveredCompanyId)) ...[
+              if (activeTile != null || activeCompanyId != null) ...[
                 const SizedBox(height: 8),
-                _buildHoveredCompanyPanel(theme, state, _hoveredCompanyId!),
+                _buildBoardInfoPanel(theme, state, activeTile, activeCompanyId),
               ],
             ],
           ],
@@ -459,16 +490,34 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     );
   }
 
-  Widget _buildHoveredCompanyPanel(ThemeData theme, AcquireStateSnapshot state, String companyId) {
-    final company = state.companies[companyId];
-    if (company == null) {
-      return const SizedBox.shrink();
-    }
+  Widget _buildBoardInfoPanel(ThemeData theme, AcquireStateSnapshot state, String? tile, String? companyId) {
+    final company = companyId == null ? null : state.companies[companyId];
+    final tiles = company == null ? <String>[] : (company.tiles.toList()..sort(_compareBoardPos));
+    final color = companyId == null ? const Color(0xFF64748B) : _companyColor(companyId);
+    final stockPool = companyId == null ? null : (state.stockPool[companyId] ?? 0);
+    final unitPrice = companyId == null ? null : _companySharePrice(state, companyId);
+    final tileInHand = tile == null
+        ? null
+        : ((state.playerTiles[widget.session.userId] ?? const <String>{}).contains(tile));
+    final title = companyId ?? tile ?? 'Board Info';
+    final tilePreview = tiles.length <= 8 ? tiles.join(', ') : '${tiles.take(8).join(', ')} ... +${tiles.length - 8}';
 
-    final tiles = company.tiles.toList()..sort(_compareBoardPos);
-    final stockPool = state.stockPool[companyId] ?? 0;
-    final unitPrice = _companySharePrice(state, companyId);
-    final color = _companyColor(companyId);
+    Widget infoChip(String label, String value, {Color? tint}) {
+      final fg = tint ?? const Color(0xFF334155);
+      final bg = fg.withValues(alpha: 0.12);
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: fg.withValues(alpha: 0.3)),
+        ),
+        child: Text(
+          '$label $value',
+          style: theme.textTheme.labelSmall?.copyWith(color: fg, fontWeight: FontWeight.w700),
+        ),
+      );
+    }
 
     return Container(
       width: double.infinity,
@@ -482,14 +531,38 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '$companyId  size=${tiles.length}  safe=${company.safe}  pool=$stockPool  price=$unitPrice',
-            style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700, color: const Color(0xFF0F172A)),
+            title,
+            style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800, color: const Color(0xFF0F172A)),
           ),
-          const SizedBox(height: 4),
-          Text(
-            'tiles: ${tiles.join(', ')}',
-            style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF334155)),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              if (tile != null && companyId != null) infoChip('Tile', tile),
+              if (tileInHand == true) infoChip('In Hand', 'Yes', tint: const Color(0xFF0A7E8C)),
+            ],
           ),
+          if (companyId != null && company != null) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                infoChip('Size', '${tiles.length}', tint: color),
+                infoChip('Safe', company.safe ? 'Yes' : 'No', tint: company.safe ? const Color(0xFF027A48) : null),
+                if (stockPool != null) infoChip('Pool', '$stockPool'),
+                if (unitPrice != null) infoChip('Price', '$unitPrice'),
+              ],
+            ),
+          ],
+          if (tiles.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              tilePreview,
+              style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF334155), fontWeight: FontWeight.w600),
+            ),
+          ],
         ],
       ),
     );
@@ -524,8 +597,10 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         final companyId = companyByTile[pos];
         final company = companyId == null ? null : state.companies[companyId];
         final inHand = hand.contains(pos);
-        final isCompanyHover = companyId != null && _hoveredCompanyId != null && companyId == _hoveredCompanyId;
-        final isTileHover = _hoveredTile == pos;
+        final activeCompanyId = _activeInfoCompanyId;
+        final activeTile = _activeInfoTile;
+        final isCompanyHover = companyId != null && activeCompanyId != null && companyId == activeCompanyId;
+        final isTileHover = activeTile == pos;
 
         final color = companyId == null
             ? (isPlaced
@@ -550,10 +625,10 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         final borderWidth = isCompanyHover ? 1.8 : 1.0;
 
         final border = Border(
-          left: BorderSide(color: borderColor, width: sameLeft ? 0 : borderWidth),
-          right: BorderSide(color: borderColor, width: sameRight ? 0 : borderWidth),
-          top: BorderSide(color: borderColor, width: sameUp ? 0 : borderWidth),
-          bottom: BorderSide(color: borderColor, width: sameDown ? 0 : borderWidth),
+          left: sameLeft ? BorderSide.none : BorderSide(color: borderColor, width: borderWidth),
+          right: sameRight ? BorderSide.none : BorderSide(color: borderColor, width: borderWidth),
+          top: sameUp ? BorderSide.none : BorderSide(color: borderColor, width: borderWidth),
+          bottom: sameDown ? BorderSide.none : BorderSide(color: borderColor, width: borderWidth),
         );
 
         final radius = Radius.circular(companyId == null ? 6 : 3);
@@ -564,134 +639,121 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
           bottomRight: (!sameRight && !sameDown) ? radius : Radius.zero,
         );
 
-        final tooltip = StringBuffer()
-          ..writeln('tile: $pos')
-          ..writeln('placed: $isPlaced')
-          ..writeln('in_hand: $inHand')
-          ..writeln('company: ${companyId ?? '-'}')
-          ..writeln('company_size: ${company?.tiles.length ?? 0}')
-          ..writeln('company_safe: ${company?.safe ?? false}')
-          ..writeln('company_pool: ${companyId == null ? '-' : (state.stockPool[companyId] ?? 0)}')
-          ..writeln('company_price: ${companyId == null ? '-' : _companySharePrice(state, companyId)}')
-          ..write('can_place_now: ${canPlace && inHand}');
-
-        return Tooltip(
-          message: tooltip.toString(),
-          waitDuration: const Duration(milliseconds: 120),
-          child: MouseRegion(
-            onEnter: (_) {
-              if (!mounted) {
-                return;
+        return Material(
+          color: color,
+          borderRadius: borderRadius,
+          child: InkWell(
+            borderRadius: borderRadius,
+            onTap: () {
+              _pinBoardInfo(pos, companyId);
+              if (canPlace && inHand) {
+                _runAction(() => _client.place(room: widget.session.roomId, userId: widget.session.userId, pos: pos));
               }
-              setState(() {
-                _hoveredTile = pos;
-                _hoveredCompanyId = companyId;
-              });
             },
-            onExit: (_) {
-              if (!mounted) {
-                return;
-              }
-              setState(() {
-                if (_hoveredTile == pos) {
-                  _hoveredTile = null;
-                }
-                if (_hoveredCompanyId == companyId) {
-                  _hoveredCompanyId = null;
-                }
-              });
-            },
-            child: Material(
-              color: color,
-              borderRadius: borderRadius,
-              child: InkWell(
+            child: Container(
+              decoration: BoxDecoration(
+                border: border,
                 borderRadius: borderRadius,
-                onTap: canPlace && inHand
-                    ? () => _runAction(
-                        () => _client.place(room: widget.session.roomId, userId: widget.session.userId, pos: pos),
-                      )
+                boxShadow: isCompanyHover
+                    ? [
+                        BoxShadow(
+                          color: _companyColor(companyId).withValues(alpha: 0.24),
+                          blurRadius: 3,
+                          spreadRadius: 0.4,
+                        ),
+                      ]
                     : null,
-                child: Container(
-                  decoration: BoxDecoration(
-                    border: border,
-                    borderRadius: borderRadius,
-                    boxShadow: isCompanyHover
-                        ? [
-                            BoxShadow(
-                              color: _companyColor(companyId).withValues(alpha: 0.24),
-                              blurRadius: 3,
-                              spreadRadius: 0.4,
+              ),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final compact = constraints.maxWidth < 40;
+                  final posFontSize = compact ? 8.6 : 11.2;
+                  final badgePadding = compact
+                      ? const EdgeInsets.symmetric(horizontal: 2.4, vertical: 1.4)
+                      : const EdgeInsets.symmetric(horizontal: 4.8, vertical: 1.8);
+                  final badgeMaxWidth = (constraints.maxWidth - (compact ? 1 : 3)).clamp(12.0, 64.0);
+                  final posBadgeBg = isCompanyHover
+                      ? const Color(0xFFE2E8F0).withValues(alpha: 0.96)
+                      : const Color(0xFFE5E7EB).withValues(alpha: 0.92);
+                  const posBadgeFg = Color(0xFF1F2937);
+                  return Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      if (companyId != null && !compact)
+                        Positioned(
+                          right: compact ? 1 : 2,
+                          bottom: compact ? 1 : 2,
+                          child: Container(
+                            padding: badgePadding,
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: isCompanyHover ? 0.32 : 0.18),
+                              borderRadius: BorderRadius.circular(4),
                             ),
-                          ]
-                        : null,
-                  ),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final compact = constraints.maxWidth < 40;
-                      final posFontSize = compact ? 7.5 : 9.0;
-                      final badgePadding = compact
-                          ? const EdgeInsets.symmetric(horizontal: 2, vertical: 1)
-                          : const EdgeInsets.symmetric(horizontal: 3, vertical: 1);
-
-                      return Stack(
-                        children: [
-                          Positioned(
-                            left: compact ? 1 : 2,
-                            top: compact ? 1 : 2,
-                            child: Container(
-                              padding: badgePadding,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF111827).withValues(alpha: isCompanyHover ? 0.86 : 0.76),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(
-                                pos,
-                                maxLines: 1,
-                                overflow: TextOverflow.clip,
-                                style: TextStyle(
-                                  fontSize: posFontSize,
-                                  height: 1,
-                                  fontWeight: FontWeight.w700,
-                                  color: const Color(0xFFF8FAFC),
-                                ),
-                              ),
+                            child: Text(
+                              companyId[0],
+                              style: TextStyle(fontSize: compact ? 8.0 : 9.0, fontWeight: FontWeight.w700, color: fg),
                             ),
                           ),
-                          if (companyId != null)
-                            Positioned(
-                              right: compact ? 1 : 2,
-                              bottom: compact ? 1 : 2,
-                              child: Container(
-                                padding: badgePadding,
-                                decoration: BoxDecoration(
-                                  color: Colors.black.withValues(alpha: isCompanyHover ? 0.32 : 0.18),
-                                  borderRadius: BorderRadius.circular(4),
+                        ),
+                      if (inHand)
+                        Positioned(
+                          right: compact ? 1 : 2,
+                          top: compact ? 1 : 2,
+                          child: Container(
+                            width: compact ? 11 : 14,
+                            height: compact ? 11 : 14,
+                            decoration: BoxDecoration(
+                              color: canPlace ? const Color(0xFF0A7E8C) : const Color(0xFF334155),
+                              borderRadius: BorderRadius.circular(3),
+                              border: Border.all(color: Colors.white.withValues(alpha: 0.78), width: 0.7),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.14),
+                                  blurRadius: 1.2,
+                                  offset: const Offset(0, 0.6),
                                 ),
-                                child: Text(
-                                  companyId[0],
-                                  style: TextStyle(
-                                    fontSize: compact ? 8.0 : 9.0,
-                                    fontWeight: FontWeight.w700,
-                                    color: fg,
-                                  ),
-                                ),
-                              ),
+                              ],
                             ),
-                          if (inHand)
-                            Positioned(
-                              right: compact ? 2 : 3,
-                              top: compact ? 1 : 2,
-                              child: Icon(
-                                Icons.circle,
-                                size: compact ? 6.0 : 7.0,
-                                color: canPlace ? const Color(0xFF0A7E8C) : fg,
-                              ),
+                            child: Icon(
+                              Icons.check_rounded,
+                              size: compact ? 8.0 : 10.0,
+                              color: const Color(0xFFF8FAFC),
                             ),
-                        ],
-                      );
-                    },
-                  ),
-                ),
+                          ),
+                        ),
+                      Positioned(
+                        left: compact ? 1 : 2,
+                        top: compact ? 1 : 2,
+                        child: Container(
+                          padding: badgePadding,
+                          constraints: BoxConstraints(
+                            minWidth: compact ? 12 : 15,
+                            minHeight: compact ? 10 : 12,
+                            maxWidth: badgeMaxWidth,
+                          ),
+                          decoration: BoxDecoration(
+                            color: posBadgeBg,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: const Color(0xFF334155).withValues(alpha: 0.36), width: 0.7),
+                          ),
+                          child: Text(
+                            pos,
+                            maxLines: 1,
+                            softWrap: false,
+                            // overflow: TextOverflow.fade,
+                            textScaler: TextScaler.noScaling,
+                            style: TextStyle(
+                              fontSize: posFontSize,
+                              height: 1,
+                              fontWeight: FontWeight.w900,
+                              color: posBadgeFg,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
           ),
@@ -883,28 +945,44 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                 'Waiting for pending players to complete merge stock decisions.',
                 style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFF475467)),
               ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                OutlinedButton(
-                  onPressed: canOperate && isMyTurn && myHandSize < 6
-                      ? () => _runAction(
-                          () => _client.drawTile(room: widget.session.roomId, userId: widget.session.userId),
-                        )
-                      : null,
-                  child: const Text('Draw Tile'),
-                ),
-                OutlinedButton(
-                  onPressed: canOperate && isMyTurn && (myPhase == 'place' || myPhase == 'buy')
-                      ? () => _runAction(
-                          () => _client.declareEnd(room: widget.session.roomId, userId: widget.session.userId),
-                        )
-                      : null,
-                  child: const Text('Declare End'),
-                ),
-              ],
+            const SizedBox(height: 12),
+            const Divider(height: 1, thickness: 2),
+            const SizedBox(height: 10),
+            Text(
+              'Quick Actions',
+              style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800, color: const Color(0xFF344054)),
+            ),
+            const SizedBox(height: 6),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFD0D7E5)),
+              ),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton(
+                    onPressed: canOperate && isMyTurn && myHandSize < 6
+                        ? () => _runAction(
+                            () => _client.drawTile(room: widget.session.roomId, userId: widget.session.userId),
+                          )
+                        : null,
+                    child: const Text('Draw Tile'),
+                  ),
+                  OutlinedButton(
+                    onPressed: canOperate && isMyTurn && (myPhase == 'place' || myPhase == 'buy')
+                        ? () => _runAction(
+                            () => _client.declareEnd(room: widget.session.roomId, userId: widget.session.userId),
+                          )
+                        : null,
+                    child: const Text('Declare End'),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -926,6 +1004,22 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     final insufficientCash = estimatedAfterCash < 0;
     final selectedSummary = _buyPlan.entries.where((e) => e.value > 0).map((e) => '${e.key} x${e.value}').toList();
 
+    Widget metricChip(String label, String value, {Color? tint}) {
+      final fg = tint ?? const Color(0xFF334155);
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: fg.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: fg.withValues(alpha: 0.3)),
+        ),
+        child: Text(
+          '$label $value',
+          style: theme.textTheme.labelSmall?.copyWith(color: fg, fontWeight: FontWeight.w700),
+        ),
+      );
+    }
+
     if (purchasable.isEmpty) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -940,7 +1034,15 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Buy Shares', style: theme.textTheme.titleMedium),
+        Row(
+          children: [
+            Text('Buy Shares', style: theme.textTheme.titleMedium),
+            const Spacer(),
+            metricChip('shares', '$totalPlanned/3', tint: totalPlanned == 3 ? const Color(0xFF0A7E8C) : null),
+            const SizedBox(width: 6),
+            metricChip('cash', '$myCash', tint: const Color(0xFF027A48)),
+          ],
+        ),
         const SizedBox(height: 8),
         ...purchasable.map((company) {
           final pool = state.stockPool[company] ?? 0;
@@ -950,54 +1052,146 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
           final subTotal = unitPrice * current;
           final canIncrease = canOperate && canAddMore && current < maxForCompany;
           final canDecrease = canOperate && current > 0;
+          final allInTarget = maxForCompany;
+          final canAllIn = canOperate && allInTarget > 0;
+          final tint = _companyColor(company);
 
           return Container(
             margin: const EdgeInsets.only(bottom: 8),
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             decoration: BoxDecoration(
-              border: Border.all(color: const Color(0xFFD0D7E5)),
+              color: tint.withValues(alpha: 0.08),
+              border: Border.all(color: tint.withValues(alpha: 0.36)),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(child: Text('$company (pool: $pool, price: $unitPrice)')),
-                IconButton(
-                  visualDensity: VisualDensity.compact,
-                  onPressed: canDecrease
-                      ? () {
-                          setState(() {
-                            final next = current - 1;
-                            if (next <= 0) {
-                              _buyPlan.remove(company);
-                            } else {
-                              _buyPlan[company] = next;
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        company,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: const Color(0xFF0F172A),
+                        ),
+                      ),
+                    ),
+                    metricChip('subtotal', '$subTotal', tint: const Color(0xFF475467)),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    metricChip('pool', '$pool'),
+                    metricChip('price', '$unitPrice'),
+                    metricChip('max', '$maxForCompany'),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      onPressed: canDecrease
+                          ? () {
+                              setState(() {
+                                final next = current - 1;
+                                if (next <= 0) {
+                                  _buyPlan.remove(company);
+                                } else {
+                                  _buyPlan[company] = next;
+                                }
+                              });
                             }
-                          });
-                        }
-                      : null,
-                  icon: const Icon(Icons.remove_circle_outline),
+                          : null,
+                      icon: const Icon(Icons.remove_circle_outline),
+                    ),
+                    Container(
+                      width: 34,
+                      alignment: Alignment.center,
+                      child: Text('$current', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+                    ),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      onPressed: canIncrease
+                          ? () {
+                              setState(() {
+                                _buyPlan[company] = current + 1;
+                              });
+                            }
+                          : null,
+                      icon: const Icon(Icons.add_circle_outline),
+                    ),
+                    const SizedBox(width: 4),
+                    OutlinedButton(
+                      onPressed: canAllIn
+                          ? () {
+                              setState(() {
+                                _buyPlan
+                                  ..clear()
+                                  ..[company] = allInTarget;
+                              });
+                            }
+                          : null,
+                      child: const Text('ALL IN'),
+                    ),
+                  ],
                 ),
-                Text('$current', style: const TextStyle(fontWeight: FontWeight.w700)),
-                IconButton(
-                  visualDensity: VisualDensity.compact,
-                  onPressed: canIncrease
-                      ? () {
-                          setState(() {
-                            _buyPlan[company] = current + 1;
-                          });
-                        }
-                      : null,
-                  icon: const Icon(Icons.add_circle_outline),
-                ),
-                const SizedBox(width: 8),
-                Text('= $subTotal'),
               ],
             ),
           );
         }),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8FAFC),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xFFD0D7E5)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  metricChip('selected', '$totalPlanned/3', tint: totalPlanned == 3 ? const Color(0xFF0A7E8C) : null),
+                  metricChip('cost', '$estimatedCost'),
+                  metricChip(
+                    'after',
+                    '$estimatedAfterCash',
+                    tint: insufficientCash ? const Color(0xFFB42318) : const Color(0xFF027A48),
+                  ),
+                ],
+              ),
+              if (selectedSummary.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  selectedSummary.join(', '),
+                  style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF475467)),
+                ),
+              ],
+              if (insufficientCash) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Not enough cash for current selection.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFFB42318),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
         Row(
           children: [
-            Expanded(child: Text('Total shares: $totalPlanned / 3', style: theme.textTheme.bodyMedium)),
             TextButton(
               onPressed: canOperate && totalPlanned > 0
                   ? () {
@@ -1006,42 +1200,23 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                   : null,
               child: const Text('Clear'),
             ),
+            const Spacer(),
+            ElevatedButton(
+              onPressed: canOperate && !insufficientCash
+                  ? () => _runAction(
+                      () => _client.buy(
+                        room: widget.session.roomId,
+                        userId: widget.session.userId,
+                        purchases: {
+                          for (final entry in _buyPlan.entries)
+                            if (entry.value > 0) entry.key: entry.value,
+                        },
+                      ),
+                    )
+                  : null,
+              child: const Text('Confirm Buy'),
+            ),
           ],
-        ),
-        if (selectedSummary.isNotEmpty)
-          Text(
-            'Selected: ${selectedSummary.join(', ')}',
-            style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF475467)),
-          ),
-        const SizedBox(height: 4),
-        Text('Estimated cost: $estimatedCost', style: theme.textTheme.bodySmall),
-        Text(
-          'Cash after buy: $estimatedAfterCash',
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: insufficientCash ? const Color(0xFFB42318) : const Color(0xFF027A48),
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        if (insufficientCash)
-          Text(
-            'Not enough cash for current selection.',
-            style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFFB42318)),
-          ),
-        const SizedBox(height: 8),
-        ElevatedButton(
-          onPressed: canOperate && !insufficientCash
-              ? () => _runAction(
-                  () => _client.buy(
-                    room: widget.session.roomId,
-                    userId: widget.session.userId,
-                    purchases: {
-                      for (final entry in _buyPlan.entries)
-                        if (entry.value > 0) entry.key: entry.value,
-                    },
-                  ),
-                )
-              : null,
-          child: const Text('Confirm Buy'),
         ),
       ],
     );
@@ -1049,7 +1224,14 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
 
   Widget _buildChooseCompanyPanel(ThemeData theme, AcquireStateSnapshot state, bool canOperate) {
     final active = state.companies.keys.toSet();
-    final candidates = AcquireClient.companyCatalog.where((c) => !active.contains(c)).toList();
+    final candidates = AcquireClient.companyCatalog.where((c) => !active.contains(c)).toList()
+      ..sort((a, b) {
+        final tierCmp = _companyTier(a).compareTo(_companyTier(b));
+        if (tierCmp != 0) {
+          return tierCmp;
+        }
+        return a.compareTo(b);
+      });
     final foundingTiles = (state.foundingContext?.tiles ?? const <String>[])..sort();
 
     return Column(
@@ -1057,27 +1239,45 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       children: [
         Text('Choose Company', style: theme.textTheme.titleMedium),
         const SizedBox(height: 8),
-        if (foundingTiles.isNotEmpty) Text('Founding tiles: ${foundingTiles.join(', ')}'),
+        if (foundingTiles.isNotEmpty)
+          Text(
+            'Founding tiles: ${foundingTiles.join(', ')}',
+            style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF475467), fontWeight: FontWeight.w600),
+          ),
         if (foundingTiles.isNotEmpty) const SizedBox(height: 8),
         Wrap(
           spacing: 8,
           runSpacing: 8,
-          children: candidates
-              .map(
-                (c) => ElevatedButton(
-                  onPressed: canOperate
-                      ? () => _runAction(
-                          () => _client.chooseCompany(
-                            room: widget.session.roomId,
-                            userId: widget.session.userId,
-                            company: c,
-                          ),
-                        )
-                      : null,
-                  child: Text(c),
+          children: candidates.map((c) {
+            final tint = _companyColor(c);
+            final tier = _companyTier(c);
+            return ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: tint.withValues(alpha: 0.18),
+                foregroundColor: const Color(0xFF0F172A),
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  side: BorderSide(color: tint.withValues(alpha: 0.62), width: 1.1),
                 ),
-              )
-              .toList(),
+              ),
+              onPressed: canOperate
+                  ? () => _runAction(
+                      () => _client.chooseCompany(
+                        room: widget.session.roomId,
+                        userId: widget.session.userId,
+                        company: c,
+                      ),
+                    )
+                  : null,
+              icon: Icon(Icons.circle, size: 12, color: tint),
+              label: Text(
+                '$c  L$tier',
+                style: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
+              ),
+            );
+          }).toList(),
         ),
       ],
     );
@@ -1300,13 +1500,52 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
 
     final players = state.players.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
 
+    Widget metricChip(String label, String value, {Color? tint}) {
+      final bg = (tint ?? const Color(0xFF64748B)).withValues(alpha: 0.12);
+      final fg = tint ?? const Color(0xFF334155);
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: fg.withValues(alpha: 0.28)),
+        ),
+        child: Text(
+          '$label $value',
+          style: theme.textTheme.labelSmall?.copyWith(color: fg, fontWeight: FontWeight.w700),
+        ),
+      );
+    }
+
+    Widget companyHoldingChip(String company, int shares) {
+      final tint = _companyColor(company);
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: tint.withValues(alpha: 0.22),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: tint.withValues(alpha: 0.62)),
+        ),
+        child: Text(
+          '$company $shares',
+          style: theme.textTheme.labelSmall?.copyWith(color: const Color(0xFF111827), fontWeight: FontWeight.w800),
+        ),
+      );
+    }
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Players', style: theme.textTheme.titleLarge),
+            Row(
+              children: [
+                Text('Players', style: theme.textTheme.titleLarge),
+                const Spacer(),
+                metricChip('count', '${players.length}'),
+              ],
+            ),
             const SizedBox(height: 8),
             ...players.map((entry) {
               final uid = entry.key;
@@ -1314,17 +1553,105 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
               final holding = state.shares[uid] ?? const <String, int>{};
               final nonZero = holding.entries.where((e) => e.value > 0).toList()
                 ..sort((a, b) => a.key.compareTo(b.key));
-              final holdingText = nonZero.isEmpty ? '-' : nonZero.map((e) => '${e.key}:${e.value}').join(', ');
+              final isMe = uid == widget.session.userId;
+              final isTurn = state.currentPlayer == uid;
+
               return Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Text('$uid  cash=$cash  shares=[$holdingText]'),
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: isTurn
+                        ? const Color(0xFFE8F7F5)
+                        : (isMe ? const Color(0xFFF4F7FF) : const Color(0xFFF8FAFC)),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: isTurn ? const Color(0xFF0B7A75).withValues(alpha: 0.45) : const Color(0xFFD0D7E5),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(uid, style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800)),
+                          ),
+                          if (isMe)
+                            Container(
+                              margin: const EdgeInsets.only(right: 6),
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1D4ED8).withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                'ME',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: const Color(0xFF1D4ED8),
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          if (isTurn)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF0B7A75).withValues(alpha: 0.14),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                'TURN',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: const Color(0xFF0B7A75),
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'cash $cash',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: const Color(0xFF027A48),
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          if (nonZero.isEmpty) metricChip('holding', '-'),
+                          ...nonZero.map((e) => companyHoldingChip(e.key, e.value)),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
               );
             }),
             if (state.gameOver && state.finalStandings.isNotEmpty) ...[
               const Divider(height: 24),
-              Text('Final Standings', style: theme.textTheme.titleMedium),
+              Text('Final Standings', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
               const SizedBox(height: 6),
-              ...state.finalStandings.map((f) => Text('${f.userId}: ${f.cash}')),
+              ...state.finalStandings.asMap().entries.map((entry) {
+                final rank = entry.key + 1;
+                final f = entry.value;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    children: [
+                      metricChip('#', '$rank', tint: const Color(0xFF7C3AED)),
+                      const SizedBox(width: 6),
+                      Expanded(child: Text(f.userId, style: theme.textTheme.bodyMedium)),
+                      metricChip('cash', '${f.cash}', tint: const Color(0xFF027A48)),
+                    ],
+                  ),
+                );
+              }),
             ],
           ],
         ),
@@ -1338,6 +1665,40 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     }
 
     final companies = state.companies.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
+    final safeCount = companies.where((e) => e.value.safe).length;
+
+    Widget metricChip(String label, String value, {Color? tint}) {
+      final bg = (tint ?? const Color(0xFF64748B)).withValues(alpha: 0.12);
+      final fg = tint ?? const Color(0xFF334155);
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: fg.withValues(alpha: 0.28)),
+        ),
+        child: Text(
+          '$label $value',
+          style: theme.textTheme.labelSmall?.copyWith(color: fg, fontWeight: FontWeight.w700),
+        ),
+      );
+    }
+
+    Widget companyIdChip(String id) {
+      final tint = _companyColor(id);
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: tint.withValues(alpha: 0.22),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: tint.withValues(alpha: 0.62)),
+        ),
+        child: Text(
+          id,
+          style: theme.textTheme.labelSmall?.copyWith(color: const Color(0xFF111827), fontWeight: FontWeight.w800),
+        ),
+      );
+    }
 
     return Card(
       child: Padding(
@@ -1345,33 +1706,130 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Companies', style: theme.textTheme.titleLarge),
+            Row(
+              children: [
+                Text('Companies', style: theme.textTheme.titleLarge),
+                const Spacer(),
+                metricChip('active', '${companies.length}'),
+                const SizedBox(width: 6),
+                metricChip('safe', '$safeCount', tint: const Color(0xFF0F766E)),
+              ],
+            ),
             const SizedBox(height: 8),
-            if (companies.isEmpty) const Text('No active companies.'),
+            if (companies.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFD0D7E5)),
+                ),
+                child: Text('No active companies.', style: theme.textTheme.bodyMedium),
+              ),
             if (companies.isNotEmpty)
               ...companies.map((entry) {
                 final id = entry.key;
                 final company = entry.value;
                 final pool = state.stockPool[id] ?? 0;
+                final size = company.tiles.length;
+                final price = _companySharePrice(state, id);
+                final color = _companyColor(id);
                 return Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Text('$id  size=${company.tiles.length}  safe=${company.safe}  stock_pool=$pool'),
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: color.withValues(alpha: 0.45)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(id, style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800)),
+                            ),
+                            if (company.safe)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF0F766E).withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: Text(
+                                  'SAFE',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: const Color(0xFF0F766E),
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            metricChip('size', '$size', tint: color),
+                            metricChip('pool', '$pool'),
+                            metricChip('price', '$price'),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
                 );
               }),
             if (state.mergeContext != null) ...[
               const Divider(height: 24),
-              Text('Merge Context', style: theme.textTheme.titleMedium),
+              Text('Merge Context', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
               const SizedBox(height: 6),
-              Text('placed: ${state.mergeContext!.placedPos}'),
-              Text('candidates: ${state.mergeContext!.candidates.join(', ')}'),
-              Text('allowed_survivors: ${state.mergeContext!.allowedSurvivors.join(', ')}'),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  metricChip('placed', state.mergeContext!.placedPos),
+                  metricChip('candidates', '${state.mergeContext!.candidates.length}'),
+                  metricChip('survivors', '${state.mergeContext!.allowedSurvivors.length}'),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Wrap(spacing: 6, runSpacing: 6, children: state.mergeContext!.candidates.map(companyIdChip).toList()),
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: state.mergeContext!.allowedSurvivors.map(companyIdChip).toList(),
+              ),
             ],
             if (state.mergeSettlement != null) ...[
               const Divider(height: 24),
-              Text('Merge Settlement', style: theme.textTheme.titleMedium),
+              Text('Merge Settlement', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
               const SizedBox(height: 6),
-              Text('survivor: ${state.mergeSettlement!.survivor}'),
-              Text('losers: ${state.mergeSettlement!.losers.join(', ')}'),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  metricChip(
+                    'survivor',
+                    state.mergeSettlement!.survivor,
+                    tint: _companyColor(state.mergeSettlement!.survivor),
+                  ),
+                  metricChip('losers', '${state.mergeSettlement!.losers.length}'),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Wrap(spacing: 6, runSpacing: 6, children: state.mergeSettlement!.losers.map(companyIdChip).toList()),
             ],
           ],
         ),
@@ -1423,16 +1881,6 @@ Color _companyColor(String company) {
       return const Color(0xFF8E5BBE);
     case 'Tower':
       return const Color(0xFF4E9F6D);
-    case 'America':
-      return const Color(0xFFE67E22);
-    case 'Zeta':
-      return const Color(0xFF4E9F6D);
-    case 'Fusion':
-      return const Color(0xFFE67E22);
-    case 'Hydra':
-      return const Color(0xFF16A085);
-    case 'Phoenix':
-      return const Color(0xFFD35454);
     default:
       return const Color(0xFF9AA4B2);
   }
@@ -1498,6 +1946,15 @@ int _asInt(dynamic value) {
   return 0;
 }
 
+int _companyTier(String companyId) {
+  return switch (companyId) {
+    'Worldwide' || 'Sackson' => 1,
+    'American' || 'Festival' || 'Imperial' => 2,
+    'Continental' || 'Tower' => 3,
+    _ => 1,
+  };
+}
+
 int _companySharePrice(AcquireStateSnapshot state, String companyId) {
   final size = state.companies[companyId]?.tiles.length ?? 0;
   if (size < 2) {
@@ -1516,12 +1973,7 @@ int _companySharePrice(AcquireStateSnapshot state, String companyId) {
     _ => 1000,
   };
 
-  final tier = switch (companyId) {
-    'Worldwide' || 'Sackson' => 0,
-    'American' || 'Festival' || 'Imperial' => 1,
-    'Continental' || 'Tower' => 2,
-    _ => 0,
-  };
+  final tier = _companyTier(companyId) - 1;
 
   return base + tier * 100;
 }
