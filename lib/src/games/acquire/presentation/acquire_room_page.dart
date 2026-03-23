@@ -34,6 +34,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
   int _buyShares = 0;
   String? _buyCompany;
   int _mergeShares = 2;
+  String? _hoveredTile;
 
   @override
   void initState() {
@@ -260,53 +261,331 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         padding: const EdgeInsets.all(16),
         child: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 920),
+            constraints: const BoxConstraints(maxWidth: 1400),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _buildRoomStateCard(theme, envelope, state, isMyTurn, canActNow, myPendingMergeCompanies),
+                const SizedBox(height: 8),
+                _buildRoomControlBar(),
                 const SizedBox(height: 12),
-                _buildActionCard(theme, state, isMyTurn, canActNow, myPendingMergeCompanies),
-                const SizedBox(height: 12),
-                _buildHandCard(theme, state, isMyTurn),
-                const SizedBox(height: 12),
-                _buildPlayersCard(theme, state),
-                const SizedBox(height: 12),
-                _buildCompaniesCard(theme, state),
-                const SizedBox(height: 12),
-                _buildActivityCard(theme),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    OutlinedButton(
-                      onPressed: _leaving || _busy || _settingReady || _roomStarted
-                          ? null
-                          : () => _setReady(!_isReady),
-                      child: Text(
-                        _roomStarted
-                            ? 'Game Started'
-                            : (_settingReady
-                                  ? 'Updating Ready...'
-                                  : (_isReady ? 'Cancel Ready' : 'Ready')),
-                      ),
-                    ),
-                    ElevatedButton(
-                      onPressed: () => Navigator.of(context).maybePop(),
-                      child: const Text('Back to Lobby'),
-                    ),
-                    OutlinedButton(
-                      onPressed: _leaving || _busy ? null : _leaveRoom,
-                      child: Text(_leaving ? 'Leaving...' : 'Leave Room'),
-                    ),
-                  ],
+                _buildWorkspace(
+                  theme,
+                  state,
+                  isMyTurn,
+                  canActNow,
+                  myPendingMergeCompanies,
                 ),
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildRoomControlBar() {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        OutlinedButton(
+          onPressed: _leaving || _busy || _settingReady || _roomStarted ? null : () => _setReady(!_isReady),
+          child: Text(
+            _roomStarted
+                ? 'Game Started'
+                : (_settingReady ? 'Updating Ready...' : (_isReady ? 'Cancel Ready' : 'Ready')),
+          ),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.of(context).maybePop(),
+          child: const Text('Back to Lobby'),
+        ),
+        OutlinedButton(
+          onPressed: _leaving || _busy ? null : _leaveRoom,
+          child: Text(_leaving ? 'Leaving...' : 'Leave Room'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildWorkspace(
+    ThemeData theme,
+    AcquireStateSnapshot? state,
+    bool isMyTurn,
+    bool canActNow,
+    List<String> myPendingMergeCompanies,
+  ) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isNarrow = constraints.maxWidth < 1100;
+
+        if (isNarrow) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildBoardCard(theme, state, isMyTurn),
+              const SizedBox(height: 12),
+              _buildActionCard(theme, state, isMyTurn, canActNow, myPendingMergeCompanies),
+              const SizedBox(height: 12),
+              _buildHandCard(theme, state, isMyTurn),
+              const SizedBox(height: 12),
+              _buildCompaniesCard(theme, state),
+              const SizedBox(height: 12),
+              _buildPlayersCard(theme, state),
+              const SizedBox(height: 12),
+              SizedBox(height: 320, child: _buildActivityCard(theme)),
+            ],
+          );
+        }
+
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildBoardCard(theme, state, isMyTurn),
+                  const SizedBox(height: 12),
+                  _buildActionCard(theme, state, isMyTurn, canActNow, myPendingMergeCompanies),
+                  const SizedBox(height: 12),
+                  _buildHandCard(theme, state, isMyTurn),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: 360,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildCompaniesCard(theme, state),
+                  const SizedBox(height: 12),
+                  _buildPlayersCard(theme, state),
+                  const SizedBox(height: 12),
+                  SizedBox(height: 300, child: _buildActivityCard(theme)),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildBoardCard(ThemeData theme, AcquireStateSnapshot? state, bool isMyTurn) {
+    final canPlace =
+        state != null && _roomStarted && isMyTurn && state.phase == 'place' && !_busy && !_leaving;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text('Board', style: theme.textTheme.titleLarge),
+                const SizedBox(width: 8),
+                if (state != null)
+                  Text(
+                    'placed=${state.tiles.length}',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                const SizedBox(width: 10),
+                if (_hoveredTile != null)
+                  Text(
+                    'hover=$_hoveredTile',
+                    style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF344054)),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (state == null)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(child: Text('Waiting for state snapshot...')),
+              )
+            else
+              AspectRatio(
+                aspectRatio: 12 / 9,
+                child: _buildBoardGrid(state, canPlace),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBoardGrid(AcquireStateSnapshot state, bool canPlace) {
+    final hand = state.playerTiles[widget.session.userId] ?? const <String>{};
+    final companyByTile = <String, String>{};
+    for (final entry in state.companies.entries) {
+      for (final tile in entry.value.tiles) {
+        companyByTile[tile] = entry.key;
+      }
+    }
+
+    const rows = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
+
+    return GridView.builder(
+      itemCount: rows.length * 12,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 12,
+        crossAxisSpacing: 0,
+        mainAxisSpacing: 0,
+        childAspectRatio: 1,
+      ),
+      itemBuilder: (context, index) {
+        final rowIndex = index ~/ 12;
+        final col = (index % 12) + 1;
+        final pos = '$col${rows[rowIndex]}';
+
+        final isPlaced = state.tiles.contains(pos);
+        final companyId = companyByTile[pos];
+        final inHand = hand.contains(pos);
+
+        final color = companyId == null
+            ? (isPlaced ? const Color(0xFFE5E7EB) : Colors.white)
+          : _companyColor(companyId).withValues(alpha: 0.42);
+        final fg = _readableTextColor(color);
+
+        final leftPos = _boardPosOrNull(col - 1, rowIndex, rows);
+        final rightPos = _boardPosOrNull(col + 1, rowIndex, rows);
+        final upPos = _boardPosOrNull(col, rowIndex - 1, rows);
+        final downPos = _boardPosOrNull(col, rowIndex + 1, rows);
+
+        final sameLeft = companyId != null && leftPos != null && companyByTile[leftPos] == companyId;
+        final sameRight = companyId != null && rightPos != null && companyByTile[rightPos] == companyId;
+        final sameUp = companyId != null && upPos != null && companyByTile[upPos] == companyId;
+        final sameDown = companyId != null && downPos != null && companyByTile[downPos] == companyId;
+
+        final defaultBorderColor = inHand && canPlace ? const Color(0xFF0A7E8C) : const Color(0xFFD0D7E5);
+        final companyBorderColor = _companyColor(companyId ?? '').withValues(alpha: 0.95);
+        final borderColor = companyId == null ? defaultBorderColor : companyBorderColor;
+        const borderWidth = 1.0;
+
+        final border = Border(
+          left: BorderSide(color: borderColor, width: sameLeft ? 0 : borderWidth),
+          right: BorderSide(color: borderColor, width: sameRight ? 0 : borderWidth),
+          top: BorderSide(color: borderColor, width: sameUp ? 0 : borderWidth),
+          bottom: BorderSide(color: borderColor, width: sameDown ? 0 : borderWidth),
+        );
+
+        final radius = Radius.circular(companyId == null ? 6 : 3);
+        final borderRadius = BorderRadius.only(
+          topLeft: (!sameLeft && !sameUp) ? radius : Radius.zero,
+          topRight: (!sameRight && !sameUp) ? radius : Radius.zero,
+          bottomLeft: (!sameLeft && !sameDown) ? radius : Radius.zero,
+          bottomRight: (!sameRight && !sameDown) ? radius : Radius.zero,
+        );
+
+        final tooltip = StringBuffer()
+          ..writeln('tile: $pos')
+          ..writeln('placed: $isPlaced')
+          ..writeln('in_hand: $inHand')
+          ..writeln('company: ${companyId ?? '-'}')
+          ..write('can_place_now: ${canPlace && inHand}');
+
+        return Tooltip(
+          message: tooltip.toString(),
+          waitDuration: const Duration(milliseconds: 120),
+          child: MouseRegion(
+            onEnter: (_) {
+              if (!mounted) {
+                return;
+              }
+              setState(() {
+                _hoveredTile = pos;
+              });
+            },
+            onExit: (_) {
+              if (!mounted) {
+                return;
+              }
+              setState(() {
+                if (_hoveredTile == pos) {
+                  _hoveredTile = null;
+                }
+              });
+            },
+            child: Material(
+              color: color,
+              borderRadius: borderRadius,
+              child: InkWell(
+                borderRadius: borderRadius,
+                onTap: canPlace && inHand
+                    ? () => _runAction(
+                          () => _client.place(
+                            room: widget.session.roomId,
+                            userId: widget.session.userId,
+                            pos: pos,
+                          ),
+                        )
+                    : null,
+                child: Container(
+                  decoration: BoxDecoration(
+                    border: border,
+                    borderRadius: borderRadius,
+                  ),
+                  child: Stack(
+                    children: [
+                      Positioned(
+                        left: 2,
+                        top: 2,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF9FAFB).withValues(alpha: 0.94),
+                            border: Border.all(color: const Color(0xFFB8C0CC), width: 0.7),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            pos,
+                            style: const TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF111827),
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (companyId != null)
+                        Positioned(
+                          right: 2,
+                          bottom: 2,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              companyId[0],
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                color: fg,
+                              ),
+                            ),
+                          ),
+                        ),
+                      if (inHand)
+                        Positioned(
+                          right: 3,
+                          top: 2,
+                          child: Icon(Icons.circle, size: 7, color: canPlace ? const Color(0xFF0A7E8C) : fg),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -318,43 +597,153 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     bool canActNow,
     List<String> myPendingMergeCompanies,
   ) {
+    final roomInfo = <String>[
+      'roomId: ${widget.session.roomId}',
+      'gameId: ${widget.session.gameId}',
+      'me: ${widget.session.userId}',
+      'room_started: $_roomStarted',
+      'ready: $_readyCount/$_playerCount  (min=$_minPlayers)',
+      if (_readyUsers.isNotEmpty) 'ready_users: ${_readyUsers.join(', ')}',
+    ];
+
+    final gameInfo = state == null
+        ? const <String>['Waiting for first state snapshot...']
+        : <String>[
+            'phase: ${state.phase}',
+            'turn: ${state.turnNo}',
+            'current_player: ${state.currentPlayer}',
+            'my_turn: $isMyTurn',
+            'can_act_now: $canActNow',
+            if (myPendingMergeCompanies.isNotEmpty)
+              'pending_merge_decisions: ${myPendingMergeCompanies.join(', ')}',
+            if (envelope != null && envelope.event.isNotEmpty) 'last_event: ${envelope.event}',
+          ];
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Acquire Room', style: theme.textTheme.titleLarge),
-            const SizedBox(height: 8),
-            Text('roomId: ${widget.session.roomId}'),
-            Text('gameId: ${widget.session.gameId}'),
-            Text('me: ${widget.session.userId}'),
-            if (state != null) ...[
-              const SizedBox(height: 8),
-              Text('phase: ${state.phase}'),
-              Text('turn: ${state.turnNo}'),
-              Text('current_player: ${state.currentPlayer}'),
-              Text('my_turn: $isMyTurn'),
-              Text('can_act_now: $canActNow'),
-              Text('room_started: $_roomStarted'),
-              Text('ready: $_readyCount/$_playerCount  (min=$_minPlayers)'),
-              if (_readyUsers.isNotEmpty) Text('ready_users: ${_readyUsers.join(', ')}'),
-              if (myPendingMergeCompanies.isNotEmpty)
-                Text('pending_merge_decisions: ${myPendingMergeCompanies.join(', ')}'),
-              if (envelope != null && envelope.event.isNotEmpty) Text('last_event: ${envelope.event}'),
-            ] else
-              const Text('Waiting for first state snapshot...'),
-            if (!_roomStarted)
-              Text(
-                'Game will start when all players are ready.',
-                style: theme.textTheme.bodySmall,
-              ),
-            if (_error != null) ...[
-              const SizedBox(height: 8),
-              Text(_error!, style: theme.textTheme.bodyMedium?.copyWith(color: Colors.red.shade700)),
-            ],
-          ],
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final split = constraints.maxWidth >= 900;
+            final roomPanel = _buildInfoPanel(theme, 'Room Info', roomInfo);
+            final statePanel = _buildInfoPanel(theme, 'Game State', gameInfo);
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (split)
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(child: roomPanel),
+                      const SizedBox(width: 12),
+                      Expanded(child: statePanel),
+                    ],
+                  )
+                else ...[
+                  roomPanel,
+                  const SizedBox(height: 10),
+                  statePanel,
+                ],
+                const SizedBox(height: 8),
+                _buildStateHighlights(theme, state, isMyTurn, canActNow),
+                if (!_roomStarted) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Game will start when all players are ready.',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ],
+                if (_error != null) ...[
+                  const SizedBox(height: 8),
+                  Text(_error!, style: theme.textTheme.bodyMedium?.copyWith(color: Colors.red.shade700)),
+                ],
+              ],
+            );
+          },
         ),
+      ),
+    );
+  }
+
+  Widget _buildStateHighlights(
+    ThemeData theme,
+    AcquireStateSnapshot? state,
+    bool isMyTurn,
+    bool canActNow,
+  ) {
+    final phase = state?.phase ?? '-';
+    final waitingReady = !_roomStarted;
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 6,
+      children: [
+        _buildStatusChip(
+          label: waitingReady ? 'WAIT_READY' : 'STARTED',
+          bgColor: waitingReady ? const Color(0xFFFFF5E6) : const Color(0xFFEAF7EF),
+          fgColor: waitingReady ? const Color(0xFFB26A00) : const Color(0xFF1E7D39),
+        ),
+        _buildStatusChip(
+          label: 'PHASE: $phase',
+          bgColor: const Color(0xFFEFF4FF),
+          fgColor: const Color(0xFF1D4ED8),
+        ),
+        _buildStatusChip(
+          label: isMyTurn ? 'MY TURN' : 'WAIT TURN',
+          bgColor: isMyTurn ? const Color(0xFFE7F9F8) : const Color(0xFFF3F4F6),
+          fgColor: isMyTurn ? const Color(0xFF0B7A75) : const Color(0xFF4B5563),
+        ),
+        _buildStatusChip(
+          label: canActNow ? 'CAN ACT' : 'READ ONLY',
+          bgColor: canActNow ? const Color(0xFFEAF7EF) : const Color(0xFFF3F4F6),
+          fgColor: canActNow ? const Color(0xFF1E7D39) : const Color(0xFF4B5563),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStatusChip({
+    required String label,
+    required Color bgColor,
+    required Color fgColor,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: fgColor.withValues(alpha: 0.35)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+          color: fgColor,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInfoPanel(ThemeData theme, String title, List<String> lines) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7F9FC),
+        border: Border.all(color: const Color(0xFFD0D7E5)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: theme.textTheme.titleMedium),
+          const SizedBox(height: 6),
+          ...lines.map((line) => Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Text(line),
+              )),
+        ],
       ),
     );
   }
@@ -830,17 +1219,62 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
           children: [
             Text('Activity', style: theme.textTheme.titleLarge),
             const SizedBox(height: 8),
-            if (_activityLog.isEmpty) const Text('No events yet.'),
-            if (_activityLog.isNotEmpty)
-              ..._activityLog.map((line) => Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
-                    child: Text(line),
-                  )),
+            if (_activityLog.isEmpty)
+              const Text('No events yet.')
+            else
+              Expanded(
+                child: ListView.builder(
+                  itemCount: _activityLog.length,
+                  itemBuilder: (context, index) {
+                    final line = _activityLog[index];
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Text(line),
+                    );
+                  },
+                ),
+              ),
           ],
         ),
       ),
     );
   }
+}
+
+Color _companyColor(String company) {
+  switch (company) {
+    case 'Sackson':
+      return const Color(0xFFE3B341);
+    case 'Zeta':
+      return const Color(0xFF4E9F6D);
+    case 'America':
+      return const Color(0xFF5B8FF9);
+    case 'Fusion':
+      return const Color(0xFFE67E22);
+    case 'Hydra':
+      return const Color(0xFF16A085);
+    case 'Phoenix':
+      return const Color(0xFFD35454);
+    case 'Worldwide':
+      return const Color(0xFF8E5BBE);
+    default:
+      return const Color(0xFF9AA4B2);
+  }
+}
+
+String? _boardPosOrNull(int col, int rowIndex, List<String> rows) {
+  if (col < 1 || col > 12) {
+    return null;
+  }
+  if (rowIndex < 0 || rowIndex >= rows.length) {
+    return null;
+  }
+  return '$col${rows[rowIndex]}';
+}
+
+Color _readableTextColor(Color background) {
+  final luminance = background.computeLuminance();
+  return luminance > 0.58 ? const Color(0xFF111827) : Colors.white;
 }
 
 int _asInt(dynamic value) {
