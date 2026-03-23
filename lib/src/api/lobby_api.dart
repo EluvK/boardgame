@@ -188,6 +188,20 @@ class LobbyApi {
     }
   }
 
+  Future<void> setReady({
+    required String roomId,
+    required bool ready,
+  }) async {
+    final res = await _emitAndWait(
+      emitEvent: 'set_ready',
+      payload: {'room': roomId, 'ready': ready},
+      responseEvent: 'ready_result',
+    );
+    if (res['ok'] != true) {
+      throw Exception(res['err']?.toString() ?? 'set_ready_failed');
+    }
+  }
+
   Future<void> sendAction({
     required String room,
     required Map<String, dynamic> action,

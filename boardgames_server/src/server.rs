@@ -48,6 +48,12 @@ pub struct CloseRoomReq {
     pub room: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetReadyReq {
+    pub room: String,
+    pub ready: bool,
+}
+
 /// Server-side state stored in socket.io State<T>
 pub struct ServerState {
     /// map socket_id -> (SocketRef, user_id)
@@ -205,6 +211,7 @@ pub async fn handle_on_connect(_io: SocketIo, socket: SocketRef, _state: State<S
     socket.on("close_room", socket_on_close_room);
     socket.on("join_room", socket_on_join_room);
     socket.on("leave_room", socket_on_leave_room);
+    socket.on("set_ready", socket_on_set_ready);
     socket.on("action", socket_on_action);
     socket.on_disconnect(socket_on_disconnect);
 }
@@ -495,18 +502,33 @@ async fn socket_on_join_room(
             match res {
                 ActionResult::Ok { broadcasts, .. } => {
                     let room_summary = room.summary().await;
+                    let ready_status = room.ready_status().await;
                     // emit a joined ack
                     socket
                         .emit("joined", &serde_json::json!({"ok": true, "room": req.room, "summary": room_summary}))
                         .ok();
                     // dispatch broadcasts
                     dispatch_broadcasts(&socket, &state, &req.room, broadcasts).await;
+                    dispatch_broadcasts(
+                        &socket,
+                        &state,
+                        &req.room,
+                        vec![Outbound {
+                            target: OutboundTarget::All,
+                            payload: serde_json::json!({
+                                "type": "ready_state",
+                                "room": req.room,
+                                "ready_state": ready_status,
+                            }),
+                        }],
+                    )
+                    .await;
                     emit_rooms_updated_to_lobby(&socket, &state).await;
                 }
                 ActionResult::Err(e) => {
                     socket
                         .emit(
-                            "action_result",
+                            "joined",
                             &serde_json::json!({"ok": false, "err": format!("{}", e)}),
                         )
                         .ok();
@@ -518,6 +540,112 @@ async fn socket_on_join_room(
                 .emit("error", &serde_json::json!({"err":"room_not_found"}))
                 .ok();
         }
+    }
+}
+
+async fn socket_on_set_ready(
+    socket: SocketRef,
+    state: State<StateRef>,
+    Data::<SetReadyReq>(req): Data<SetReadyReq>,
+) {
+    let _req_log = SocketReqLog::new("set_ready", &socket);
+    let user = {
+        let guard = state.lock().await;
+        guard
+            .users
+            .get(socket.id.as_str())
+            .map(|(_, uid)| uid.clone())
+    };
+
+    let user = match user {
+        Some(u) => u,
+        None => {
+            socket
+                .emit("error", &serde_json::json!({"err":"unauthenticated"}))
+                .ok();
+            return;
+        }
+    };
+
+    let rm = state.lock().await.room_manager.clone();
+    let room = match rm.get_room(&req.room).await {
+        Some(r) => r,
+        None => {
+            socket
+                .emit(
+                    "ready_result",
+                    &serde_json::json!({"ok": false, "err": "room_not_found"}),
+                )
+                .ok();
+            return;
+        }
+    };
+
+    let was_started = room.is_started().await;
+    let ready_status = match room.set_ready(&user, req.ready).await {
+        Ok(status) => status,
+        Err(err) => {
+            socket
+                .emit(
+                    "ready_result",
+                    &serde_json::json!({"ok": false, "err": err}),
+                )
+                .ok();
+            return;
+        }
+    };
+
+    socket
+        .emit(
+            "ready_result",
+            &serde_json::json!({
+                "ok": true,
+                "room": req.room,
+                "ready": req.ready,
+                "ready_state": ready_status,
+            }),
+        )
+        .ok();
+
+    dispatch_broadcasts(
+        &socket,
+        &state,
+        &req.room,
+        vec![Outbound {
+            target: OutboundTarget::All,
+            payload: serde_json::json!({
+                "type": "ready_state",
+                "room": req.room,
+                "user": user,
+                "ready": req.ready,
+                "ready_state": ready_status,
+            }),
+        }],
+    )
+    .await;
+
+    if !was_started && ready_status.started {
+        let snapshot_value = room
+            .snapshot()
+            .await
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        dispatch_broadcasts(
+            &socket,
+            &state,
+            &req.room,
+            vec![Outbound {
+                target: OutboundTarget::All,
+                payload: serde_json::json!({
+                    "type": "state",
+                    "state": snapshot_value,
+                    "event": "game_started",
+                }),
+            }],
+        )
+        .await;
     }
 }
 
@@ -547,6 +675,7 @@ async fn socket_on_leave_room(
     if let Some(room) = rm.get_room(&req.room).await {
         let res = room.leave(&user).await;
         socket.leave(req.room.clone());
+        let ready_status = room.ready_status().await;
 
         let room_empty = room.is_empty().await;
         if room_empty {
@@ -555,6 +684,23 @@ async fn socket_on_leave_room(
 
         if let ActionResult::Ok { broadcasts, .. } = res {
             dispatch_broadcasts(&socket, &state, &req.room, broadcasts).await;
+        }
+
+        if !room_empty {
+            dispatch_broadcasts(
+                &socket,
+                &state,
+                &req.room,
+                vec![Outbound {
+                    target: OutboundTarget::All,
+                    payload: serde_json::json!({
+                        "type": "ready_state",
+                        "room": req.room,
+                        "ready_state": ready_status,
+                    }),
+                }],
+            )
+            .await;
         }
 
         emit_rooms_updated_to_lobby(&socket, &state).await;
@@ -657,6 +803,8 @@ async fn dispatch_broadcasts(
     for b in broadcasts {
         match b.target {
             OutboundTarget::All => {
+                // Emit to the current socket first because `socket.to(room)` excludes sender.
+                socket.emit("broadcast", &b.payload).ok();
                 socket
                     .to(room.to_string())
                     .emit("broadcast", &b.payload)

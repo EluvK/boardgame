@@ -5,10 +5,35 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "chrome",
+            "name": "Chrome Client A",
             "request": "launch",
             "type": "dart",
             "deviceId": "chrome",
+            "toolArgs": [
+                "--web-port",
+                "5001",
+                "--web-browser-flag=--user-data-dir=F:/tmp/boardgame_acquire_chrome_a"
+            ]
+        },
+        {
+            "name": "Chrome Client B",
+            "request": "launch",
+            "type": "dart",
+            "deviceId": "chrome",
+            "toolArgs": [
+                "--web-port",
+                "5002",
+                "--web-browser-flag=--user-data-dir=F:/tmp/boardgame_acquire_chrome_b"
+            ]
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Dual Chrome Clients",
+            "configurations": [
+                "Chrome Client A",
+                "Chrome Client B"
+            ]
         }
     ]
 }

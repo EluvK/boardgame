@@ -20,6 +20,13 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
   late final AcquireClient _client;
   bool _leaving = false;
   bool _busy = false;
+  bool _settingReady = false;
+  bool _isReady = false;
+  bool _roomStarted = false;
+  int _readyCount = 0;
+  int _playerCount = 0;
+  int _minPlayers = 2;
+  List<String> _readyUsers = const [];
   String? _error;
   AcquireStateEnvelope? _latestEnvelope;
   final List<String> _activityLog = [];
@@ -67,13 +74,16 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     if (!mounted) {
       return;
     }
-    if (payload['type']?.toString() != 'state') {
-      return;
-    }
 
     setState(() {
-      _applyStatePayload(payload);
-      _error = null;
+      final type = payload['type']?.toString() ?? '';
+      if (type == 'state') {
+        _applyStatePayload(payload);
+        _error = null;
+      } else if (type == 'ready_state') {
+        _applyReadyPayload(payload);
+        _error = null;
+      }
     });
   }
 
@@ -84,11 +94,32 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
 
     final ty = payload['type']?.toString() ?? 'message';
     setState(() {
+      if (ty == 'ready_state') {
+        _applyReadyPayload(payload);
+      }
       _activityLog.insert(0, '$ty: ${payload.toString()}');
       if (_activityLog.length > 30) {
         _activityLog.removeLast();
       }
     });
+  }
+
+  void _applyReadyPayload(Map<String, dynamic> payload) {
+    final readyStateRaw = payload['ready_state'];
+    if (readyStateRaw is! Map) {
+      return;
+    }
+    final readyState = readyStateRaw.map((k, v) => MapEntry(k.toString(), v));
+    final users = readyState['ready_users'];
+    final readyUsers = users is List ? users.map((e) => e.toString()).toList() : <String>[];
+    final readyUsersSorted = [...readyUsers]..sort();
+
+    _readyUsers = readyUsersSorted;
+    _readyCount = _asInt(readyState['ready_count']);
+    _playerCount = _asInt(readyState['player_count']);
+    _minPlayers = _asInt(readyState['min_players']);
+    _roomStarted = readyState['started'] == true;
+    _isReady = _readyUsers.contains(widget.session.userId);
   }
 
   void _applyStatePayload(Map<String, dynamic> payload) {
@@ -142,6 +173,40 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     }
   }
 
+  Future<void> _setReady(bool ready) async {
+    if (_busy || _leaving || _settingReady) {
+      return;
+    }
+
+    setState(() {
+      _settingReady = true;
+      _error = null;
+    });
+
+    try {
+      await widget.session.api.setReady(roomId: widget.session.roomId, ready: ready);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _isReady = ready;
+      });
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _error = e.toString();
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _settingReady = false;
+        });
+      }
+    }
+  }
+
   Future<void> _leaveRoom() async {
     if (_leaving) {
       return;
@@ -184,6 +249,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         ? const <String>[]
         : ((state.mergeSettlement?.pending[widget.session.userId] ?? const <String>{}).toList()..sort());
     final canActNow = state != null &&
+      _roomStarted &&
         !_busy &&
         !_leaving &&
         (isMyTurn || (state.phase == 'merge_stock_decision' && myPendingMergeCompanies.isNotEmpty));
@@ -214,6 +280,18 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                   spacing: 8,
                   runSpacing: 8,
                   children: [
+                    OutlinedButton(
+                      onPressed: _leaving || _busy || _settingReady || _roomStarted
+                          ? null
+                          : () => _setReady(!_isReady),
+                      child: Text(
+                        _roomStarted
+                            ? 'Game Started'
+                            : (_settingReady
+                                  ? 'Updating Ready...'
+                                  : (_isReady ? 'Cancel Ready' : 'Ready')),
+                      ),
+                    ),
                     ElevatedButton(
                       onPressed: () => Navigator.of(context).maybePop(),
                       child: const Text('Back to Lobby'),
@@ -258,11 +336,19 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
               Text('current_player: ${state.currentPlayer}'),
               Text('my_turn: $isMyTurn'),
               Text('can_act_now: $canActNow'),
+              Text('room_started: $_roomStarted'),
+              Text('ready: $_readyCount/$_playerCount  (min=$_minPlayers)'),
+              if (_readyUsers.isNotEmpty) Text('ready_users: ${_readyUsers.join(', ')}'),
               if (myPendingMergeCompanies.isNotEmpty)
                 Text('pending_merge_decisions: ${myPendingMergeCompanies.join(', ')}'),
               if (envelope != null && envelope.event.isNotEmpty) Text('last_event: ${envelope.event}'),
             ] else
               const Text('Waiting for first state snapshot...'),
+            if (!_roomStarted)
+              Text(
+                'Game will start when all players are ready.',
+                style: theme.textTheme.bodySmall,
+              ),
             if (_error != null) ...[
               const SizedBox(height: 8),
               Text(_error!, style: theme.textTheme.bodyMedium?.copyWith(color: Colors.red.shade700)),
@@ -755,4 +841,17 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       ),
     );
   }
+}
+
+int _asInt(dynamic value) {
+  if (value is int) {
+    return value;
+  }
+  if (value is num) {
+    return value.toInt();
+  }
+  if (value is String) {
+    return int.tryParse(value) ?? 0;
+  }
+  return 0;
 }

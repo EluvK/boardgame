@@ -29,17 +29,23 @@ class RoomSummary {
     required this.id,
     required this.gameId,
     required this.playerCount,
+    required this.readyCount,
+    required this.started,
   });
 
   final String id;
   final String gameId;
   final int playerCount;
+  final int readyCount;
+  final bool started;
 
   factory RoomSummary.fromJson(Map<String, dynamic> json) {
     return RoomSummary(
       id: json['id']?.toString() ?? '',
       gameId: json['game_id']?.toString() ?? '',
       playerCount: _parseInt(json['player_count']),
+      readyCount: _parseInt(json['ready_count']),
+      started: json['started'] == true,
     );
   }
 }

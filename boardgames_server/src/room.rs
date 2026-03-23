@@ -10,7 +10,13 @@ pub struct Room {
     pub id: RoomId,
     pub game: Arc<dyn Game>,
     state: Mutex<Box<dyn GameState>>,
-    users: Mutex<HashSet<UserId>>,
+    meta: Mutex<RoomMeta>,
+}
+
+struct RoomMeta {
+    users: HashSet<UserId>,
+    ready_users: HashSet<UserId>,
+    started: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -27,6 +33,21 @@ pub struct RoomSummary {
     pub id: RoomId,
     pub game_id: GameId,
     pub player_count: usize,
+    pub ready_count: usize,
+    pub started: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ReadyStatus {
+    pub room: RoomId,
+    pub game_id: GameId,
+    pub player_count: usize,
+    pub ready_count: usize,
+    pub min_players: usize,
+    pub max_players: usize,
+    pub started: bool,
+    pub all_ready: bool,
+    pub ready_users: Vec<UserId>,
 }
 
 impl Room {
@@ -36,14 +57,24 @@ impl Room {
             id,
             game,
             state: Mutex::new(state),
-            users: Mutex::new(HashSet::new()),
+            meta: Mutex::new(RoomMeta {
+                users: HashSet::new(),
+                ready_users: HashSet::new(),
+                started: false,
+            }),
         })
     }
 
     pub async fn join(&self, user: UserId) -> ActionResult {
         let mut state_guard = self.state.lock().await;
-        let mut users_guard = self.users.lock().await;
-        users_guard.insert(user.clone());
+        let mut meta_guard = self.meta.lock().await;
+        if meta_guard.started && !meta_guard.users.contains(&user) {
+            return ActionResult::Err(crate::game::GameError::Invalid(
+                "room_already_started".to_string(),
+            ));
+        }
+        meta_guard.users.insert(user.clone());
+        meta_guard.ready_users.remove(&user);
 
         let ctx = ActionCtx {
             room_id: self.id.clone(),
@@ -58,8 +89,9 @@ impl Room {
 
     pub async fn leave(&self, user: &UserId) -> ActionResult {
         let mut state_guard = self.state.lock().await;
-        let mut users_guard = self.users.lock().await;
-        users_guard.remove(user);
+        let mut meta_guard = self.meta.lock().await;
+        meta_guard.users.remove(user);
+        meta_guard.ready_users.remove(user);
 
         let ctx = ActionCtx {
             room_id: self.id.clone(),
@@ -74,6 +106,13 @@ impl Room {
     }
 
     pub async fn apply_action(&self, action: Action) -> ActionResult {
+        let started = self.meta.lock().await.started;
+        if !started {
+            return ActionResult::Err(crate::game::GameError::Invalid(
+                "room_not_started_wait_for_all_ready".to_string(),
+            ));
+        }
+
         let mut state_guard = self.state.lock().await;
 
         let ctx = ActionCtx {
@@ -94,22 +133,77 @@ impl Room {
     }
 
     pub async fn player_count(&self) -> usize {
-        self.users.lock().await.len()
+        self.meta.lock().await.users.len()
     }
 
     pub async fn has_user(&self, user: &UserId) -> bool {
-        self.users.lock().await.contains(user)
+        self.meta.lock().await.users.contains(user)
     }
 
     pub async fn is_empty(&self) -> bool {
-        self.users.lock().await.is_empty()
+        self.meta.lock().await.users.is_empty()
+    }
+
+    pub async fn is_started(&self) -> bool {
+        self.meta.lock().await.started
+    }
+
+    pub async fn set_ready(&self, user: &UserId, ready: bool) -> Result<ReadyStatus, String> {
+        let mut meta = self.meta.lock().await;
+        if !meta.users.contains(user) {
+            return Err("not_in_room".to_string());
+        }
+
+        if meta.started {
+            return Ok(self.ready_status_from_meta(&meta));
+        }
+
+        if ready {
+            meta.ready_users.insert(user.clone());
+        } else {
+            meta.ready_users.remove(user);
+        }
+
+        let min_players = self.game.descriptor().min_players;
+        let all_ready = !meta.users.is_empty() && meta.ready_users.len() == meta.users.len();
+        let enough_players = meta.users.len() >= min_players;
+        if all_ready && enough_players {
+            meta.started = true;
+        }
+
+        Ok(self.ready_status_from_meta(&meta))
+    }
+
+    pub async fn ready_status(&self) -> ReadyStatus {
+        let meta = self.meta.lock().await;
+        self.ready_status_from_meta(&meta)
+    }
+
+    fn ready_status_from_meta(&self, meta: &RoomMeta) -> ReadyStatus {
+        let mut ready_users: Vec<UserId> = meta.ready_users.iter().cloned().collect();
+        ready_users.sort();
+
+        ReadyStatus {
+            room: self.id.clone(),
+            game_id: self.game.descriptor().id.clone(),
+            player_count: meta.users.len(),
+            ready_count: meta.ready_users.len(),
+            min_players: self.game.descriptor().min_players,
+            max_players: self.game.descriptor().max_players,
+            started: meta.started,
+            all_ready: !meta.users.is_empty() && meta.ready_users.len() == meta.users.len(),
+            ready_users,
+        }
     }
 
     pub async fn summary(&self) -> RoomSummary {
+        let meta = self.meta.lock().await;
         RoomSummary {
             id: self.id.clone(),
             game_id: self.game.descriptor().id.clone(),
-            player_count: self.player_count().await,
+            player_count: meta.users.len(),
+            ready_count: meta.ready_users.len(),
+            started: meta.started,
         }
     }
 }
@@ -201,11 +295,13 @@ impl RoomManager {
         let mut out = Vec::with_capacity(rooms.len());
         for (id, room) in rooms {
             let game_id = room.game.descriptor().id.clone();
-            let player_count = room.player_count().await;
+            let summary = room.summary().await;
             out.push(RoomSummary {
                 id,
                 game_id,
-                player_count,
+                player_count: summary.player_count,
+                ready_count: summary.ready_count,
+                started: summary.started,
             });
         }
         out
