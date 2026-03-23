@@ -328,6 +328,8 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                 const SizedBox(height: 8),
                 if (!(_roomStateCollapsed ?? false))
                   _buildRoomStateCard(theme, envelope, state, isMyTurn, canActNow, myPendingMergeCompanies),
+                const SizedBox(height: 8),
+                _buildTurnHintBar(theme, state, isMyTurn, canActNow, myPendingMergeCompanies),
                 const SizedBox(height: 12),
                 _buildWorkspace(theme, state, isMyTurn, canActNow, myPendingMergeCompanies),
               ],
@@ -367,6 +369,103 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
           child: Text(_leaving ? 'Leaving...' : 'Leave Room'),
         ),
       ],
+    );
+  }
+
+  Widget _buildTurnHintBar(
+    ThemeData theme,
+    AcquireStateSnapshot? state,
+    bool isMyTurn,
+    bool canActNow,
+    List<String> myPendingMergeCompanies,
+  ) {
+    String message;
+    Color bg;
+    Color border;
+    Color fg;
+    IconData icon;
+
+    if (_busy) {
+      message = 'Submitting action...';
+      bg = const Color(0xFFEFF4FF);
+      border = const Color(0xFFBFD2FF);
+      fg = const Color(0xFF1D4ED8);
+      icon = Icons.hourglass_top_rounded;
+    } else if (!_roomStarted) {
+      message = 'Waiting for all players to be ready.';
+      bg = const Color(0xFFFFF7E8);
+      border = const Color(0xFFF1D39A);
+      fg = const Color(0xFF9A6700);
+      icon = Icons.group_outlined;
+    } else if (state == null) {
+      message = 'Waiting for latest game state...';
+      bg = const Color(0xFFF8FAFC);
+      border = const Color(0xFFD0D7E5);
+      fg = const Color(0xFF475467);
+      icon = Icons.sync;
+    } else if (state.phase == 'merge_stock_decision' && myPendingMergeCompanies.isNotEmpty) {
+      message = 'Your turn to decide merge stocks: ${myPendingMergeCompanies.join(', ')}.';
+      bg = const Color(0xFFE7F9F8);
+      border = const Color(0xFF9EDFD9);
+      fg = const Color(0xFF0B7A75);
+      icon = Icons.priority_high_rounded;
+    } else if (canActNow && isMyTurn) {
+      message = switch (state.phase) {
+        'place' => 'Your turn: place a tile from your hand.',
+        'buy' => 'Your turn: buy up to 3 shares.',
+        'choose_company' => 'Your turn: choose a company to found.',
+        'resolve_merge' => 'Your turn: choose the surviving company.',
+        _ => 'Your turn: proceed with the current action.',
+      };
+      bg = const Color(0xFFE7F9F8);
+      border = const Color(0xFF9EDFD9);
+      fg = const Color(0xFF0B7A75);
+      icon = Icons.play_circle_outline;
+    } else {
+      if (state.phase == 'merge_stock_decision') {
+        final pendingUsers = (state.mergeSettlement?.pending.entries
+                    .where((entry) => entry.value.isNotEmpty)
+                    .map((entry) => entry.key)
+                    .toList() ??
+                <String>[])
+              ..sort();
+        final target = pendingUsers.isEmpty ? 'pending players' : pendingUsers.join(', ');
+        message = 'Waiting for $target to decide merge stocks.';
+      } else {
+        message = switch (state.phase) {
+          'place' => 'Waiting for ${state.currentPlayer} to place a tile.',
+          'buy' => 'Waiting for ${state.currentPlayer} to complete buy step.',
+          'choose_company' => 'Waiting for ${state.currentPlayer} to choose a company.',
+          'resolve_merge' => 'Waiting for ${state.currentPlayer} to resolve merge.',
+          _ => 'Waiting for ${state.currentPlayer} to act.',
+        };
+      }
+      bg = const Color(0xFFF8FAFC);
+      border = const Color(0xFFD0D7E5);
+      fg = const Color(0xFF475467);
+      icon = Icons.schedule;
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: border),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: fg),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: theme.textTheme.bodyMedium?.copyWith(color: fg, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -921,30 +1020,10 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
             Text('Actions', style: theme.textTheme.titleLarge),
             const SizedBox(height: 8),
             if (myPhase == 'buy' && isMyTurn) _buildBuyPanel(theme, state, canOperate),
-            if (myPhase == 'buy' && !isMyTurn)
-              Text(
-                'Waiting for ${state.currentPlayer} to complete buy step.',
-                style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFF475467)),
-              ),
             if (myPhase == 'choose_company' && isMyTurn) _buildChooseCompanyPanel(theme, state, canOperate),
-            if (myPhase == 'choose_company' && !isMyTurn)
-              Text(
-                'Waiting for ${state.currentPlayer} to choose company.',
-                style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFF475467)),
-              ),
             if (myPhase == 'resolve_merge' && isMyTurn) _buildResolveMergePanel(theme, state, canOperate),
-            if (myPhase == 'resolve_merge' && !isMyTurn)
-              Text(
-                'Waiting for ${state.currentPlayer} to resolve merge.',
-                style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFF475467)),
-              ),
             if (myPhase == 'merge_stock_decision' && myPendingMergeCompanies.isNotEmpty)
               _buildMergeStockDecisionPanel(theme, state, canOperate, myPendingMergeCompanies),
-            if (myPhase == 'merge_stock_decision' && myPendingMergeCompanies.isEmpty)
-              Text(
-                'Waiting for pending players to complete merge stock decisions.',
-                style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFF475467)),
-              ),
             const SizedBox(height: 12),
             const Divider(height: 1, thickness: 2),
             const SizedBox(height: 10),
