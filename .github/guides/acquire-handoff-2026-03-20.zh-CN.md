@@ -2,6 +2,9 @@
 
 > 文档状态：历史归档（只读）。
 >
+> 时效性说明：本文件中的“待修/下次顺序”仅代表 2026-03-20 当日状态，可能已被后续实现覆盖。
+> 当前进度请以 `.github/guides/acquire-implementation-checklist.zh-CN.md` 为准。
+>
 > 日常开发请优先维护以下文档：
 > - .github/guides/acquire-rulebook.zh-CN.md
 > - .github/guides/acquire-implementation-checklist.zh-CN.md

@@ -154,7 +154,7 @@
 - [x] draw_tile_requires_non_full_hand_and_draws_when_available
 - [x] place_rejected_when_tile_not_in_hand
 
-下一批必须补：
+下一批已补完成（状态回填）：
 
 - [x] 邻接分类测试（4 类）
 - [x] 安全公司不可被并
