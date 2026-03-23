@@ -31,10 +31,10 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
   AcquireStateEnvelope? _latestEnvelope;
   final List<String> _activityLog = [];
 
-  int _buyShares = 0;
-  String? _buyCompany;
+  final Map<String, int> _buyPlan = {};
   int _mergeShares = 2;
   String? _hoveredTile;
+  String? _lastAutoPassBuyKey;
 
   @override
   void initState() {
@@ -137,13 +137,59 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     if (state == null) {
       return;
     }
-    final activeCompanies = state.companies.keys.toList()..sort();
-    if (_buyCompany != null && !activeCompanies.contains(_buyCompany)) {
-      _buyCompany = activeCompanies.isEmpty ? null : activeCompanies.first;
+
+    if (state.phase != 'buy') {
+      _buyPlan.clear();
+      _lastAutoPassBuyKey = null;
+      return;
     }
-    if (_buyCompany == null && activeCompanies.isNotEmpty) {
-      _buyCompany = activeCompanies.first;
+
+    final pools = state.stockPool;
+    _buyPlan.removeWhere((company, shares) => (pools[company] ?? 0) <= 0 || shares <= 0);
+    for (final entry in _buyPlan.entries.toList()) {
+      final pool = pools[entry.key] ?? 0;
+      final clamped = entry.value.clamp(0, pool);
+      if (clamped <= 0) {
+        _buyPlan.remove(entry.key);
+      } else if (clamped != entry.value) {
+        _buyPlan[entry.key] = clamped;
+      }
     }
+
+    _maybeAutoPassBuy(state);
+  }
+
+  void _maybeAutoPassBuy(AcquireStateSnapshot state) {
+    if (!_roomStarted || _busy || _leaving) {
+      return;
+    }
+    if (state.phase != 'buy' || state.currentPlayer != widget.session.userId) {
+      return;
+    }
+
+    final hasPurchasable = state.companies.keys.any((c) => (state.stockPool[c] ?? 0) > 0);
+    if (hasPurchasable) {
+      return;
+    }
+
+    final key = '${state.turnNo}:${state.currentPlayer}:buy_pass';
+    if (_lastAutoPassBuyKey == key) {
+      return;
+    }
+    _lastAutoPassBuyKey = key;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      _runAction(
+        () => _client.buy(
+          room: widget.session.roomId,
+          userId: widget.session.userId,
+          purchases: const <String, int>{},
+        ),
+      );
+    });
   }
 
   Future<void> _runAction(Future<void> Function() action) async {
@@ -771,11 +817,31 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
           children: [
             Text('Actions', style: theme.textTheme.titleLarge),
             const SizedBox(height: 8),
-            if (myPhase == 'buy') _buildBuyPanel(theme, state, canOperate),
-            if (myPhase == 'choose_company') _buildChooseCompanyPanel(theme, state, canOperate),
-            if (myPhase == 'resolve_merge') _buildResolveMergePanel(theme, state, canOperate),
-            if (myPhase == 'merge_stock_decision')
+            if (myPhase == 'buy' && isMyTurn) _buildBuyPanel(theme, state, canOperate),
+            if (myPhase == 'buy' && !isMyTurn)
+              Text(
+                'Waiting for ${state.currentPlayer} to complete buy step.',
+                style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFF475467)),
+              ),
+            if (myPhase == 'choose_company' && isMyTurn) _buildChooseCompanyPanel(theme, state, canOperate),
+            if (myPhase == 'choose_company' && !isMyTurn)
+              Text(
+                'Waiting for ${state.currentPlayer} to choose company.',
+                style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFF475467)),
+              ),
+            if (myPhase == 'resolve_merge' && isMyTurn) _buildResolveMergePanel(theme, state, canOperate),
+            if (myPhase == 'resolve_merge' && !isMyTurn)
+              Text(
+                'Waiting for ${state.currentPlayer} to resolve merge.',
+                style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFF475467)),
+              ),
+            if (myPhase == 'merge_stock_decision' && myPendingMergeCompanies.isNotEmpty)
               _buildMergeStockDecisionPanel(theme, state, canOperate, myPendingMergeCompanies),
+            if (myPhase == 'merge_stock_decision' && myPendingMergeCompanies.isEmpty)
+              Text(
+                'Waiting for pending players to complete merge stock decisions.',
+                style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFF475467)),
+              ),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
@@ -813,62 +879,141 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
 
   Widget _buildBuyPanel(ThemeData theme, AcquireStateSnapshot state, bool canOperate) {
     final activeCompanies = state.companies.keys.toList()..sort();
-    final canPickCompany = _buyShares > 0 && activeCompanies.isNotEmpty;
+    final purchasable = activeCompanies.where((c) => (state.stockPool[c] ?? 0) > 0).toList();
+    final totalPlanned = _buyPlan.values.fold<int>(0, (sum, v) => sum + v);
+    final canAddMore = totalPlanned < 3;
+    final myCash = state.players[widget.session.userId] ?? 0;
+    final estimatedCost = _buyPlan.entries.fold<int>(0, (sum, entry) {
+      final unitPrice = _companySharePrice(state, entry.key);
+      return sum + (unitPrice * entry.value);
+    });
+    final estimatedAfterCash = myCash - estimatedCost;
+    final insufficientCash = estimatedAfterCash < 0;
+    final selectedSummary = _buyPlan.entries
+        .where((e) => e.value > 0)
+        .map((e) => '${e.key} x${e.value}')
+        .toList();
+
+    if (purchasable.isEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Buy Shares', style: theme.textTheme.titleMedium),
+          const SizedBox(height: 8),
+          const Text('No active company shares can be purchased now. Auto passing this buy step...'),
+        ],
+      );
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text('Buy Shares', style: theme.textTheme.titleMedium),
         const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          children: List<Widget>.generate(4, (i) {
-            return ChoiceChip(
-              label: Text('$i'),
-              selected: _buyShares == i,
-              onSelected: canOperate
-                  ? (_) {
-                      setState(() {
-                        _buyShares = i;
-                      });
+        ...purchasable.map((company) {
+          final pool = state.stockPool[company] ?? 0;
+          final current = _buyPlan[company] ?? 0;
+          final maxForCompany = pool.clamp(0, 3);
+          final unitPrice = _companySharePrice(state, company);
+          final subTotal = unitPrice * current;
+          final canIncrease = canOperate && canAddMore && current < maxForCompany;
+          final canDecrease = canOperate && current > 0;
+
+          return Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFFD0D7E5)),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text('$company (pool: $pool, price: $unitPrice)'),
+                ),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  onPressed: canDecrease
+                      ? () {
+                          setState(() {
+                            final next = current - 1;
+                            if (next <= 0) {
+                              _buyPlan.remove(company);
+                            } else {
+                              _buyPlan[company] = next;
+                            }
+                          });
+                        }
+                      : null,
+                  icon: const Icon(Icons.remove_circle_outline),
+                ),
+                Text('$current', style: const TextStyle(fontWeight: FontWeight.w700)),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  onPressed: canIncrease
+                      ? () {
+                          setState(() {
+                            _buyPlan[company] = current + 1;
+                          });
+                        }
+                      : null,
+                  icon: const Icon(Icons.add_circle_outline),
+                ),
+                const SizedBox(width: 8),
+                Text('= $subTotal'),
+              ],
+            ),
+          );
+        }),
+        Row(
+          children: [
+            Expanded(
+              child: Text('Total shares: $totalPlanned / 3', style: theme.textTheme.bodyMedium),
+            ),
+            TextButton(
+              onPressed: canOperate && totalPlanned > 0
+                  ? () {
+                      setState(_buyPlan.clear);
                     }
                   : null,
-            );
-          }),
+              child: const Text('Clear'),
+            ),
+          ],
         ),
-        const SizedBox(height: 8),
-        DropdownButtonFormField<String>(
-          initialValue: canPickCompany ? _buyCompany : null,
-          decoration: const InputDecoration(labelText: 'Company (required when shares > 0)'),
-          items: activeCompanies
-              .map(
-                (c) => DropdownMenuItem<String>(
-                  value: c,
-                  child: Text(c),
-                ),
-              )
-              .toList(),
-          onChanged: canOperate && canPickCompany
-              ? (v) {
-                  setState(() {
-                    _buyCompany = v;
-                  });
-                }
-              : null,
+        if (selectedSummary.isNotEmpty)
+          Text(
+            'Selected: ${selectedSummary.join(', ')}',
+            style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF475467)),
+          ),
+        const SizedBox(height: 4),
+        Text('Estimated cost: $estimatedCost', style: theme.textTheme.bodySmall),
+        Text(
+          'Cash after buy: $estimatedAfterCash',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: insufficientCash ? const Color(0xFFB42318) : const Color(0xFF027A48),
+            fontWeight: FontWeight.w600,
+          ),
         ),
+        if (insufficientCash)
+          Text(
+            'Not enough cash for current selection.',
+            style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFFB42318)),
+          ),
         const SizedBox(height: 8),
         ElevatedButton(
-          onPressed: canOperate && (_buyShares == 0 || (_buyCompany != null && _buyCompany!.isNotEmpty))
+          onPressed: canOperate && !insufficientCash
               ? () => _runAction(
                     () => _client.buy(
                       room: widget.session.roomId,
                       userId: widget.session.userId,
-                      shares: _buyShares,
-                      company: _buyShares == 0 ? null : _buyCompany,
+                      purchases: {
+                        for (final entry in _buyPlan.entries)
+                          if (entry.value > 0) entry.key: entry.value,
+                      },
                     ),
                   )
               : null,
-          child: const Text('Submit Buy'),
+          child: const Text('Confirm Buy'),
         ),
       ],
     );
@@ -1288,4 +1433,32 @@ int _asInt(dynamic value) {
     return int.tryParse(value) ?? 0;
   }
   return 0;
+}
+
+int _companySharePrice(AcquireStateSnapshot state, String companyId) {
+  final size = state.companies[companyId]?.tiles.length ?? 0;
+  if (size < 2) {
+    return 0;
+  }
+
+  final base = switch (size) {
+    2 => 200,
+    3 => 300,
+    4 => 400,
+    5 => 500,
+    <= 10 => 600,
+    <= 20 => 700,
+    <= 30 => 800,
+    <= 40 => 900,
+    _ => 1000,
+  };
+
+  final tier = switch (companyId) {
+    'Worldwide' || 'Sackson' => 0,
+    'American' || 'Festival' || 'Imperial' => 1,
+    'Continental' || 'Tower' => 2,
+    _ => 0,
+  };
+
+  return base + tier * 100;
 }

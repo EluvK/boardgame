@@ -6,13 +6,13 @@ class AcquireClient {
   final LobbyApi api;
 
   static const List<String> companyCatalog = [
-    'Sackson',
-    'Zeta',
-    'America',
-    'Fusion',
-    'Hydra',
-    'Phoenix',
     'Worldwide',
+    'Sackson',
+    'American',
+    'Festival',
+    'Imperial',
+    'Continental',
+    'Tower',
   ];
 
   Future<void> place({
@@ -33,16 +33,24 @@ class AcquireClient {
   Future<void> buy({
     required String room,
     required String userId,
-    required int shares,
-    String? company,
+    required Map<String, int> purchases,
   }) {
+    final normalizedPurchases = <String, int>{};
+    for (final entry in purchases.entries) {
+      if (entry.key.isEmpty || entry.value <= 0) {
+        continue;
+      }
+      normalizedPurchases[entry.key] = entry.value;
+    }
+    final totalShares = normalizedPurchases.values.fold<int>(0, (sum, n) => sum + n);
+
     return _sendAction(
       room: room,
       userId: userId,
       payload: {
         'type': 'buy',
-        'shares': shares,
-        if (company != null && company.isNotEmpty) 'company': company,
+        'shares': totalShares,
+        'purchases': normalizedPurchases,
       },
     );
   }

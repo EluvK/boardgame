@@ -483,12 +483,46 @@ async fn socket_on_join_room(
         }
 
         if let Some(current) = room_manager.room_summary(&req.room).await {
+            socket.join(req.room.clone());
             socket
                 .emit(
                     "joined",
                     &serde_json::json!({"ok": true, "room": req.room, "summary": current, "already_in_room": true}),
                 )
                 .ok();
+
+            if let Some(room) = room_manager.get_room(&req.room).await {
+                let ready_status = room.ready_status().await;
+                let snapshot_value = room
+                    .snapshot()
+                    .await
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                    .unwrap_or_else(|| serde_json::json!({}));
+
+                socket
+                    .emit(
+                        "broadcast",
+                        &serde_json::json!({
+                            "type": "state",
+                            "state": snapshot_value,
+                            "event": "rejoin_sync",
+                            "room": req.room,
+                        }),
+                    )
+                    .ok();
+
+                socket
+                    .emit(
+                        "broadcast",
+                        &serde_json::json!({
+                            "type": "ready_state",
+                            "room": req.room,
+                            "ready_state": ready_status,
+                        }),
+                    )
+                    .ok();
+            }
             return;
         }
     }

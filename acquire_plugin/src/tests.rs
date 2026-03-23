@@ -80,7 +80,7 @@ mod tests {
             .handle_action(
                 ctx,
                 state.as_mut(),
-                make_action(user, json!({"type":"buy", "shares":0})),
+                make_action(user, json!({"type":"buy", "purchases": {}})),
             )
             .await;
         assert!(matches!(buy, ActionResult::Ok { .. }));
@@ -121,7 +121,7 @@ mod tests {
             .handle_action(
                 ctx,
                 state.as_mut(),
-                make_action("u2", json!({"type":"buy","company":"Sackson","shares":1})),
+                make_action("u2", json!({"type":"buy","purchases":{"Sackson":1}})),
             )
             .await;
         assert!(matches!(buy_sackson, ActionResult::Ok { .. }));
@@ -234,7 +234,7 @@ mod tests {
             .handle_action(
                 &ctx,
                 state.as_mut(),
-                make_action("u1", json!({"type":"buy", "shares": 4})),
+                make_action("u1", json!({"type":"buy", "purchases": {"Worldwide": 4}})),
             )
             .await;
         match invalid_buy {
@@ -242,19 +242,19 @@ mod tests {
             _ => panic!("expected invalid shares"),
         }
 
-        // cannot buy non-zero shares without specifying an active company.
-        let missing_company = game
+        // malformed payload without purchases map should fail.
+        let missing_purchases = game
             .handle_action(
                 &ctx,
                 state.as_mut(),
                 make_action("u1", json!({"type":"buy", "shares": 1})),
             )
             .await;
-        match missing_company {
+        match missing_purchases {
             ActionResult::Err(game::GameError::Invalid(e)) => {
-                assert_eq!(e, "missing_company_for_buy")
+                assert_eq!(e, "invalid_buy_purchases")
             }
-            _ => panic!("expected missing_company_for_buy"),
+            _ => panic!("expected invalid_buy_purchases"),
         }
 
         // buy zero still advances to next player's place phase.
@@ -262,7 +262,7 @@ mod tests {
             .handle_action(
                 &ctx,
                 state.as_mut(),
-                make_action("u1", json!({"type":"buy", "shares": 0})),
+                make_action("u1", json!({"type":"buy", "purchases": {}})),
             )
             .await;
         assert!(matches!(ok_buy, ActionResult::Ok { .. }));
@@ -339,7 +339,7 @@ mod tests {
             .handle_action(
                 &ctx,
                 state.as_mut(),
-                make_action("u1", json!({"type":"buy", "shares":0})),
+                make_action("u1", json!({"type":"buy", "purchases": {}})),
             )
             .await;
         assert!(matches!(buy_after_resolve, ActionResult::Ok { .. }));
@@ -379,7 +379,7 @@ mod tests {
             .handle_action(
                 &ctx,
                 state.as_mut(),
-                make_action("u2", json!({"type":"buy","company":"Worldwide","shares":1})),
+                make_action("u2", json!({"type":"buy","purchases":{"Worldwide":1}})),
             )
             .await;
         assert!(matches!(buy, ActionResult::Ok { .. }));
@@ -581,7 +581,7 @@ mod tests {
             .handle_action(
                 &ctx,
                 state.as_mut(),
-                make_action("u2", json!({"type":"buy","shares":0})),
+                make_action("u2", json!({"type":"buy","purchases":{}})),
             )
             .await;
         assert!(matches!(buy_zero, ActionResult::Ok { .. }));
@@ -600,7 +600,7 @@ mod tests {
             .handle_action(
                 &ctx,
                 state.as_mut(),
-                make_action("u1", json!({"type":"buy","shares":0})),
+                make_action("u1", json!({"type":"buy","purchases":{}})),
             )
             .await;
         assert!(matches!(b1, ActionResult::Ok { .. }));

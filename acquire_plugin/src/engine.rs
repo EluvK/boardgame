@@ -886,35 +886,39 @@ impl Game for AcquireGame {
                     ));
                 }
 
-                // minimal buy: 0..=3 shares, flat 100/share
-                let shares = action
-                    .payload
-                    .get("shares")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
-                if !(0..=3).contains(&shares) {
+                let mut purchases: Vec<(String, i64)> = Vec::new();
+
+                let Some(raw_purchases) = action.payload.get("purchases") else {
+                    return ActionResult::Err(game::GameError::Invalid("invalid_buy_purchases".into()));
+                };
+                let Some(map) = raw_purchases.as_object() else {
+                    return ActionResult::Err(game::GameError::Invalid("invalid_buy_purchases".into()));
+                };
+
+                for (cid, qty_value) in map {
+                    let qty = qty_value.as_i64().unwrap_or(-1);
+                    if qty < 0 {
+                        return ActionResult::Err(game::GameError::Invalid("invalid shares".into()));
+                    }
+                    if qty == 0 {
+                        continue;
+                    }
+                    purchases.push((cid.clone(), qty));
+                }
+
+                let total_shares: i64 = purchases.iter().map(|(_, qty)| *qty).sum();
+                if !(0..=3).contains(&total_shares) {
                     return ActionResult::Err(game::GameError::Invalid("invalid shares".into()));
                 }
 
-                let company = action
-                    .payload
-                    .get("company")
-                    .and_then(|v| v.as_str())
-                    .map(ToString::to_string);
-
-                if shares > 0 {
-                    let Some(cid) = company.as_ref() else {
-                        return ActionResult::Err(game::GameError::Invalid(
-                            "missing_company_for_buy".into(),
-                        ));
-                    };
+                for (cid, qty) in &purchases {
                     if !s.companies.contains_key(cid) {
                         return ActionResult::Err(game::GameError::Invalid(
                             "company_not_active".into(),
                         ));
                     }
                     if let Some(pool) = s.stock_pool.get(cid)
-                        && *pool < shares
+                        && *pool < *qty
                     {
                         return ActionResult::Err(game::GameError::Invalid(
                             "not_enough_stock_pool".into(),
@@ -922,38 +926,45 @@ impl Game for AcquireGame {
                     }
                 }
 
-                let unit_price = if shares > 0 {
-                    let cid = company.as_ref().expect("checked above when shares > 0");
-                    s.company_share_price(cid)
-                } else {
-                    0
-                };
-                if shares > 0 && unit_price <= 0 {
-                    return ActionResult::Err(game::GameError::Invalid("company_not_tradeable".into()));
+                let mut total_cost = 0i64;
+                for (cid, qty) in &purchases {
+                    let unit_price = s.company_share_price(cid);
+                    if unit_price <= 0 {
+                        return ActionResult::Err(game::GameError::Invalid("company_not_tradeable".into()));
+                    }
+                    total_cost += qty * unit_price;
                 }
 
                 let player_cash = s.players.entry(action.user_id.clone()).or_insert(6000);
-                let cost = shares * unit_price;
-                if *player_cash < cost {
+                if *player_cash < total_cost {
                     return ActionResult::Err(game::GameError::Invalid("not_enough_cash".into()));
                 }
-                *player_cash -= cost;
+                *player_cash -= total_cost;
                 let cash_after = *player_cash;
 
-                if shares > 0 {
-                    let cid = company.as_ref().expect("checked above when shares > 0");
+                for (cid, qty) in &purchases {
                     if let Some(pool) = s.stock_pool.get_mut(cid) {
-                        *pool -= shares;
+                        *pool -= *qty;
                     }
-                    *s.share_mut(&action.user_id, cid) += shares;
+                    *s.share_mut(&action.user_id, cid) += *qty;
                 }
 
-                let holding_after = s
-                    .shares
-                    .get(&action.user_id)
-                    .and_then(|m| company.as_ref().and_then(|cid| m.get(cid)))
-                    .copied()
-                    .unwrap_or(0);
+                let holdings_after: Vec<Value> = purchases
+                    .iter()
+                    .map(|(cid, _)| {
+                        let holding = s
+                            .shares
+                            .get(&action.user_id)
+                            .and_then(|m| m.get(cid))
+                            .copied()
+                            .unwrap_or(0);
+                        json!({"company": cid, "holding": holding})
+                    })
+                    .collect();
+                let purchase_items: Vec<Value> = purchases
+                    .iter()
+                    .map(|(cid, qty)| json!({"company": cid, "shares": qty}))
+                    .collect();
 
                 s.advance_turn();
 
@@ -962,10 +973,10 @@ impl Game for AcquireGame {
                     payload: json!({
                         "type":"buy_ok",
                         "user": action.user_id,
-                        "company": company,
-                        "unit_price": unit_price,
-                        "shares": shares,
-                        "holding": holding_after,
+                        "shares": total_shares,
+                        "purchases": purchase_items,
+                        "holdings": holdings_after,
+                        "cost": total_cost,
                         "cash": cash_after
                     }),
                 };
