@@ -5,10 +5,7 @@ import '../data/acquire_client.dart';
 import '../data/acquire_models.dart';
 
 class AcquireRoomPage extends StatefulWidget {
-  const AcquireRoomPage({
-    super.key,
-    required this.session,
-  });
+  const AcquireRoomPage({super.key, required this.session});
 
   final RoomSession session;
 
@@ -34,6 +31,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
   final Map<String, int> _buyPlan = {};
   int _mergeShares = 2;
   String? _hoveredTile;
+  String? _hoveredCompanyId;
   String? _lastAutoPassBuyKey;
 
   @override
@@ -183,11 +181,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         return;
       }
       _runAction(
-        () => _client.buy(
-          room: widget.session.roomId,
-          userId: widget.session.userId,
-          purchases: const <String, int>{},
-        ),
+        () => _client.buy(room: widget.session.roomId, userId: widget.session.userId, purchases: const <String, int>{}),
       );
     });
   }
@@ -295,8 +289,9 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     final myPendingMergeCompanies = state == null
         ? const <String>[]
         : ((state.mergeSettlement?.pending[widget.session.userId] ?? const <String>{}).toList()..sort());
-    final canActNow = state != null &&
-      _roomStarted &&
+    final canActNow =
+        state != null &&
+        _roomStarted &&
         !_busy &&
         !_leaving &&
         (isMyTurn || (state.phase == 'merge_stock_decision' && myPendingMergeCompanies.isNotEmpty));
@@ -315,13 +310,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                 const SizedBox(height: 8),
                 _buildRoomControlBar(),
                 const SizedBox(height: 12),
-                _buildWorkspace(
-                  theme,
-                  state,
-                  isMyTurn,
-                  canActNow,
-                  myPendingMergeCompanies,
-                ),
+                _buildWorkspace(theme, state, isMyTurn, canActNow, myPendingMergeCompanies),
               ],
             ),
           ),
@@ -343,10 +332,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                 : (_settingReady ? 'Updating Ready...' : (_isReady ? 'Cancel Ready' : 'Ready')),
           ),
         ),
-        ElevatedButton(
-          onPressed: () => Navigator.of(context).maybePop(),
-          child: const Text('Back to Lobby'),
-        ),
+        ElevatedButton(onPressed: () => Navigator.of(context).maybePop(), child: const Text('Back to Lobby')),
         OutlinedButton(
           onPressed: _leaving || _busy ? null : _leaveRoom,
           child: Text(_leaving ? 'Leaving...' : 'Leave Room'),
@@ -421,8 +407,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
   }
 
   Widget _buildBoardCard(ThemeData theme, AcquireStateSnapshot? state, bool isMyTurn) {
-    final canPlace =
-        state != null && _roomStarted && isMyTurn && state.phase == 'place' && !_busy && !_leaving;
+    final canPlace = state != null && _roomStarted && isMyTurn && state.phase == 'place' && !_busy && !_leaving;
 
     return Card(
       child: Padding(
@@ -430,20 +415,22 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            Wrap(
+              spacing: 10,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text('Board', style: theme.textTheme.titleLarge),
-                const SizedBox(width: 8),
-                if (state != null)
-                  Text(
-                    'placed=${state.tiles.length}',
-                    style: theme.textTheme.bodySmall,
-                  ),
-                const SizedBox(width: 10),
+                if (state != null) Text('placed=${state.tiles.length}', style: theme.textTheme.bodySmall),
                 if (_hoveredTile != null)
                   Text(
-                    'hover=$_hoveredTile',
+                    'hover_tile=$_hoveredTile',
                     style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF344054)),
+                  ),
+                if (_hoveredCompanyId != null && state?.companies.containsKey(_hoveredCompanyId) == true)
+                  Text(
+                    'hover_company=$_hoveredCompanyId (${state!.companies[_hoveredCompanyId]!.tiles.length} tiles)',
+                    style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF0A7E8C)),
                   ),
               ],
             ),
@@ -454,12 +441,56 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                 child: Center(child: Text('Waiting for state snapshot...')),
               )
             else
-              AspectRatio(
-                aspectRatio: 12 / 9,
-                child: _buildBoardGrid(state, canPlace),
+              AspectRatio(aspectRatio: 12 / 9, child: _buildBoardGrid(state, canPlace)),
+            if (state != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                'Tip: hover any tile of a company to highlight the whole company block.',
+                style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF667085)),
               ),
+              if (_hoveredCompanyId != null && state.companies.containsKey(_hoveredCompanyId)) ...[
+                const SizedBox(height: 8),
+                _buildHoveredCompanyPanel(theme, state, _hoveredCompanyId!),
+              ],
+            ],
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildHoveredCompanyPanel(ThemeData theme, AcquireStateSnapshot state, String companyId) {
+    final company = state.companies[companyId];
+    if (company == null) {
+      return const SizedBox.shrink();
+    }
+
+    final tiles = company.tiles.toList()..sort(_compareBoardPos);
+    final stockPool = state.stockPool[companyId] ?? 0;
+    final unitPrice = _companySharePrice(state, companyId);
+    final color = _companyColor(companyId);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.16),
+        border: Border.all(color: color.withValues(alpha: 0.75), width: 1.2),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '$companyId  size=${tiles.length}  safe=${company.safe}  pool=$stockPool  price=$unitPrice',
+            style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700, color: const Color(0xFF0F172A)),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'tiles: ${tiles.join(', ')}',
+            style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF334155)),
+          ),
+        ],
       ),
     );
   }
@@ -491,11 +522,16 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
 
         final isPlaced = state.tiles.contains(pos);
         final companyId = companyByTile[pos];
+        final company = companyId == null ? null : state.companies[companyId];
         final inHand = hand.contains(pos);
+        final isCompanyHover = companyId != null && _hoveredCompanyId != null && companyId == _hoveredCompanyId;
+        final isTileHover = _hoveredTile == pos;
 
         final color = companyId == null
-            ? (isPlaced ? const Color(0xFFE5E7EB) : Colors.white)
-          : _companyColor(companyId).withValues(alpha: 0.42);
+            ? (isPlaced
+                  ? (isTileHover ? const Color(0xFFD6DFEC) : const Color(0xFFE5E7EB))
+                  : (isTileHover ? const Color(0xFFF3F4F6) : Colors.white))
+            : _companyColor(companyId).withValues(alpha: isCompanyHover ? 0.62 : 0.42);
         final fg = _readableTextColor(color);
 
         final leftPos = _boardPosOrNull(col - 1, rowIndex, rows);
@@ -509,9 +545,9 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         final sameDown = companyId != null && downPos != null && companyByTile[downPos] == companyId;
 
         final defaultBorderColor = inHand && canPlace ? const Color(0xFF0A7E8C) : const Color(0xFFD0D7E5);
-        final companyBorderColor = _companyColor(companyId ?? '').withValues(alpha: 0.95);
+        final companyBorderColor = _companyColor(companyId ?? '').withValues(alpha: isCompanyHover ? 1 : 0.95);
         final borderColor = companyId == null ? defaultBorderColor : companyBorderColor;
-        const borderWidth = 1.0;
+        final borderWidth = isCompanyHover ? 1.8 : 1.0;
 
         final border = Border(
           left: BorderSide(color: borderColor, width: sameLeft ? 0 : borderWidth),
@@ -533,6 +569,10 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
           ..writeln('placed: $isPlaced')
           ..writeln('in_hand: $inHand')
           ..writeln('company: ${companyId ?? '-'}')
+          ..writeln('company_size: ${company?.tiles.length ?? 0}')
+          ..writeln('company_safe: ${company?.safe ?? false}')
+          ..writeln('company_pool: ${companyId == null ? '-' : (state.stockPool[companyId] ?? 0)}')
+          ..writeln('company_price: ${companyId == null ? '-' : _companySharePrice(state, companyId)}')
           ..write('can_place_now: ${canPlace && inHand}');
 
         return Tooltip(
@@ -545,6 +585,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
               }
               setState(() {
                 _hoveredTile = pos;
+                _hoveredCompanyId = companyId;
               });
             },
             onExit: (_) {
@@ -555,6 +596,9 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                 if (_hoveredTile == pos) {
                   _hoveredTile = null;
                 }
+                if (_hoveredCompanyId == companyId) {
+                  _hoveredCompanyId = null;
+                }
               });
             },
             child: Material(
@@ -564,67 +608,88 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                 borderRadius: borderRadius,
                 onTap: canPlace && inHand
                     ? () => _runAction(
-                          () => _client.place(
-                            room: widget.session.roomId,
-                            userId: widget.session.userId,
-                            pos: pos,
-                          ),
-                        )
+                        () => _client.place(room: widget.session.roomId, userId: widget.session.userId, pos: pos),
+                      )
                     : null,
                 child: Container(
                   decoration: BoxDecoration(
                     border: border,
                     borderRadius: borderRadius,
+                    boxShadow: isCompanyHover
+                        ? [
+                            BoxShadow(
+                              color: _companyColor(companyId).withValues(alpha: 0.24),
+                              blurRadius: 3,
+                              spreadRadius: 0.4,
+                            ),
+                          ]
+                        : null,
                   ),
-                  child: Stack(
-                    children: [
-                      Positioned(
-                        left: 2,
-                        top: 2,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF9FAFB).withValues(alpha: 0.94),
-                            border: Border.all(color: const Color(0xFFB8C0CC), width: 0.7),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            pos,
-                            style: const TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF111827),
-                            ),
-                          ),
-                        ),
-                      ),
-                      if (companyId != null)
-                        Positioned(
-                          right: 2,
-                          bottom: 2,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.18),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              companyId[0],
-                              style: TextStyle(
-                                fontSize: 9,
-                                fontWeight: FontWeight.w700,
-                                color: fg,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final compact = constraints.maxWidth < 40;
+                      final posFontSize = compact ? 7.5 : 9.0;
+                      final badgePadding = compact
+                          ? const EdgeInsets.symmetric(horizontal: 2, vertical: 1)
+                          : const EdgeInsets.symmetric(horizontal: 3, vertical: 1);
+
+                      return Stack(
+                        children: [
+                          Positioned(
+                            left: compact ? 1 : 2,
+                            top: compact ? 1 : 2,
+                            child: Container(
+                              padding: badgePadding,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF111827).withValues(alpha: isCompanyHover ? 0.86 : 0.76),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                pos,
+                                maxLines: 1,
+                                overflow: TextOverflow.clip,
+                                style: TextStyle(
+                                  fontSize: posFontSize,
+                                  height: 1,
+                                  fontWeight: FontWeight.w700,
+                                  color: const Color(0xFFF8FAFC),
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                      if (inHand)
-                        Positioned(
-                          right: 3,
-                          top: 2,
-                          child: Icon(Icons.circle, size: 7, color: canPlace ? const Color(0xFF0A7E8C) : fg),
-                        ),
-                    ],
+                          if (companyId != null)
+                            Positioned(
+                              right: compact ? 1 : 2,
+                              bottom: compact ? 1 : 2,
+                              child: Container(
+                                padding: badgePadding,
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: isCompanyHover ? 0.32 : 0.18),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  companyId[0],
+                                  style: TextStyle(
+                                    fontSize: compact ? 8.0 : 9.0,
+                                    fontWeight: FontWeight.w700,
+                                    color: fg,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          if (inHand)
+                            Positioned(
+                              right: compact ? 2 : 3,
+                              top: compact ? 1 : 2,
+                              child: Icon(
+                                Icons.circle,
+                                size: compact ? 6.0 : 7.0,
+                                color: canPlace ? const Color(0xFF0A7E8C) : fg,
+                              ),
+                            ),
+                        ],
+                      );
+                    },
                   ),
                 ),
               ),
@@ -660,8 +725,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
             'current_player: ${state.currentPlayer}',
             'my_turn: $isMyTurn',
             'can_act_now: $canActNow',
-            if (myPendingMergeCompanies.isNotEmpty)
-              'pending_merge_decisions: ${myPendingMergeCompanies.join(', ')}',
+            if (myPendingMergeCompanies.isNotEmpty) 'pending_merge_decisions: ${myPendingMergeCompanies.join(', ')}',
             if (envelope != null && envelope.event.isNotEmpty) 'last_event: ${envelope.event}',
           ];
 
@@ -695,10 +759,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                 _buildStateHighlights(theme, state, isMyTurn, canActNow),
                 if (!_roomStarted) ...[
                   const SizedBox(height: 8),
-                  Text(
-                    'Game will start when all players are ready.',
-                    style: theme.textTheme.bodySmall,
-                  ),
+                  Text('Game will start when all players are ready.', style: theme.textTheme.bodySmall),
                 ],
                 if (_error != null) ...[
                   const SizedBox(height: 8),
@@ -712,12 +773,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     );
   }
 
-  Widget _buildStateHighlights(
-    ThemeData theme,
-    AcquireStateSnapshot? state,
-    bool isMyTurn,
-    bool canActNow,
-  ) {
+  Widget _buildStateHighlights(ThemeData theme, AcquireStateSnapshot? state, bool isMyTurn, bool canActNow) {
     final phase = state?.phase ?? '-';
     final waitingReady = !_roomStarted;
 
@@ -730,11 +786,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
           bgColor: waitingReady ? const Color(0xFFFFF5E6) : const Color(0xFFEAF7EF),
           fgColor: waitingReady ? const Color(0xFFB26A00) : const Color(0xFF1E7D39),
         ),
-        _buildStatusChip(
-          label: 'PHASE: $phase',
-          bgColor: const Color(0xFFEFF4FF),
-          fgColor: const Color(0xFF1D4ED8),
-        ),
+        _buildStatusChip(label: 'PHASE: $phase', bgColor: const Color(0xFFEFF4FF), fgColor: const Color(0xFF1D4ED8)),
         _buildStatusChip(
           label: isMyTurn ? 'MY TURN' : 'WAIT TURN',
           bgColor: isMyTurn ? const Color(0xFFE7F9F8) : const Color(0xFFF3F4F6),
@@ -749,11 +801,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     );
   }
 
-  Widget _buildStatusChip({
-    required String label,
-    required Color bgColor,
-    required Color fgColor,
-  }) {
+  Widget _buildStatusChip({required String label, required Color bgColor, required Color fgColor}) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
@@ -763,11 +811,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       ),
       child: Text(
         label,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-          color: fgColor,
-        ),
+        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: fgColor),
       ),
     );
   }
@@ -785,10 +829,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         children: [
           Text(title, style: theme.textTheme.titleMedium),
           const SizedBox(height: 6),
-          ...lines.map((line) => Padding(
-                padding: const EdgeInsets.only(bottom: 2),
-                child: Text(line),
-              )),
+          ...lines.map((line) => Padding(padding: const EdgeInsets.only(bottom: 2), child: Text(line))),
         ],
       ),
     );
@@ -850,22 +891,16 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                 OutlinedButton(
                   onPressed: canOperate && isMyTurn && myHandSize < 6
                       ? () => _runAction(
-                            () => _client.drawTile(
-                              room: widget.session.roomId,
-                              userId: widget.session.userId,
-                            ),
-                          )
+                          () => _client.drawTile(room: widget.session.roomId, userId: widget.session.userId),
+                        )
                       : null,
                   child: const Text('Draw Tile'),
                 ),
                 OutlinedButton(
                   onPressed: canOperate && isMyTurn && (myPhase == 'place' || myPhase == 'buy')
                       ? () => _runAction(
-                            () => _client.declareEnd(
-                              room: widget.session.roomId,
-                              userId: widget.session.userId,
-                            ),
-                          )
+                          () => _client.declareEnd(room: widget.session.roomId, userId: widget.session.userId),
+                        )
                       : null,
                   child: const Text('Declare End'),
                 ),
@@ -889,10 +924,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     });
     final estimatedAfterCash = myCash - estimatedCost;
     final insufficientCash = estimatedAfterCash < 0;
-    final selectedSummary = _buyPlan.entries
-        .where((e) => e.value > 0)
-        .map((e) => '${e.key} x${e.value}')
-        .toList();
+    final selectedSummary = _buyPlan.entries.where((e) => e.value > 0).map((e) => '${e.key} x${e.value}').toList();
 
     if (purchasable.isEmpty) {
       return Column(
@@ -928,9 +960,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
             ),
             child: Row(
               children: [
-                Expanded(
-                  child: Text('$company (pool: $pool, price: $unitPrice)'),
-                ),
+                Expanded(child: Text('$company (pool: $pool, price: $unitPrice)')),
                 IconButton(
                   visualDensity: VisualDensity.compact,
                   onPressed: canDecrease
@@ -967,9 +997,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         }),
         Row(
           children: [
-            Expanded(
-              child: Text('Total shares: $totalPlanned / 3', style: theme.textTheme.bodyMedium),
-            ),
+            Expanded(child: Text('Total shares: $totalPlanned / 3', style: theme.textTheme.bodyMedium)),
             TextButton(
               onPressed: canOperate && totalPlanned > 0
                   ? () {
@@ -1003,15 +1031,15 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         ElevatedButton(
           onPressed: canOperate && !insufficientCash
               ? () => _runAction(
-                    () => _client.buy(
-                      room: widget.session.roomId,
-                      userId: widget.session.userId,
-                      purchases: {
-                        for (final entry in _buyPlan.entries)
-                          if (entry.value > 0) entry.key: entry.value,
-                      },
-                    ),
-                  )
+                  () => _client.buy(
+                    room: widget.session.roomId,
+                    userId: widget.session.userId,
+                    purchases: {
+                      for (final entry in _buyPlan.entries)
+                        if (entry.value > 0) entry.key: entry.value,
+                    },
+                  ),
+                )
               : null,
           child: const Text('Confirm Buy'),
         ),
@@ -1029,10 +1057,8 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       children: [
         Text('Choose Company', style: theme.textTheme.titleMedium),
         const SizedBox(height: 8),
-        if (foundingTiles.isNotEmpty)
-          Text('Founding tiles: ${foundingTiles.join(', ')}'),
-        if (foundingTiles.isNotEmpty)
-          const SizedBox(height: 8),
+        if (foundingTiles.isNotEmpty) Text('Founding tiles: ${foundingTiles.join(', ')}'),
+        if (foundingTiles.isNotEmpty) const SizedBox(height: 8),
         Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -1041,12 +1067,12 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                 (c) => ElevatedButton(
                   onPressed: canOperate
                       ? () => _runAction(
-                            () => _client.chooseCompany(
-                              room: widget.session.roomId,
-                              userId: widget.session.userId,
-                              company: c,
-                            ),
-                          )
+                          () => _client.chooseCompany(
+                            room: widget.session.roomId,
+                            userId: widget.session.userId,
+                            company: c,
+                          ),
+                        )
                       : null,
                   child: Text(c),
                 ),
@@ -1073,12 +1099,12 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                 (s) => ElevatedButton(
                   onPressed: canOperate
                       ? () => _runAction(
-                            () => _client.resolveMerge(
-                              room: widget.session.roomId,
-                              userId: widget.session.userId,
-                              survivor: s,
-                            ),
-                          )
+                          () => _client.resolveMerge(
+                            room: widget.session.roomId,
+                            userId: widget.session.userId,
+                            survivor: s,
+                          ),
+                        )
                       : null,
                   child: Text('Survivor: $s'),
                 ),
@@ -1141,47 +1167,47 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                               final canTrade = canOperate && maxTradeShares >= 2;
 
                               return [
-                            OutlinedButton(
-                              onPressed: canOperate
-                                  ? () => _runAction(
-                                        () => _client.mergeStockDecision(
-                                          room: widget.session.roomId,
-                                          userId: widget.session.userId,
-                                          company: company,
-                                          mode: 'hold',
-                                        ),
-                                      )
-                                  : null,
-                              child: const Text('Hold'),
-                            ),
-                            OutlinedButton(
-                              onPressed: canSell
-                                  ? () => _runAction(
-                                        () => _client.mergeStockDecision(
-                                          room: widget.session.roomId,
-                                          userId: widget.session.userId,
-                                          company: company,
-                                          mode: 'sell',
-                                          shares: sellShares,
-                                        ),
-                                      )
-                                  : null,
-                              child: Text('Sell $sellShares'),
-                            ),
-                            OutlinedButton(
-                              onPressed: canTrade
-                                  ? () => _runAction(
-                                        () => _client.mergeStockDecision(
-                                          room: widget.session.roomId,
-                                          userId: widget.session.userId,
-                                          company: company,
-                                          mode: 'trade',
-                                          shares: tradeShares,
-                                        ),
-                                      )
-                                  : null,
-                              child: Text('Trade $tradeShares'),
-                            ),
+                                OutlinedButton(
+                                  onPressed: canOperate
+                                      ? () => _runAction(
+                                          () => _client.mergeStockDecision(
+                                            room: widget.session.roomId,
+                                            userId: widget.session.userId,
+                                            company: company,
+                                            mode: 'hold',
+                                          ),
+                                        )
+                                      : null,
+                                  child: const Text('Hold'),
+                                ),
+                                OutlinedButton(
+                                  onPressed: canSell
+                                      ? () => _runAction(
+                                          () => _client.mergeStockDecision(
+                                            room: widget.session.roomId,
+                                            userId: widget.session.userId,
+                                            company: company,
+                                            mode: 'sell',
+                                            shares: sellShares,
+                                          ),
+                                        )
+                                      : null,
+                                  child: Text('Sell $sellShares'),
+                                ),
+                                OutlinedButton(
+                                  onPressed: canTrade
+                                      ? () => _runAction(
+                                          () => _client.mergeStockDecision(
+                                            room: widget.session.roomId,
+                                            userId: widget.session.userId,
+                                            company: company,
+                                            mode: 'trade',
+                                            shares: tradeShares,
+                                          ),
+                                        )
+                                      : null,
+                                  child: Text('Trade $tradeShares'),
+                                ),
                               ];
                             }(),
                           ],
@@ -1249,12 +1275,12 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                       (tile) => ElevatedButton(
                         onPressed: canPlace
                             ? () => _runAction(
-                                  () => _client.place(
-                                    room: widget.session.roomId,
-                                    userId: widget.session.userId,
-                                    pos: tile,
-                                  ),
-                                )
+                                () => _client.place(
+                                  room: widget.session.roomId,
+                                  userId: widget.session.userId,
+                                  pos: tile,
+                                ),
+                              )
                             : null,
                         child: Text(tile),
                       ),
@@ -1329,9 +1355,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                 final pool = state.stockPool[id] ?? 0;
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 6),
-                  child: Text(
-                    '$id  size=${company.tiles.length}  safe=${company.safe}  stock_pool=$pool',
-                  ),
+                  child: Text('$id  size=${company.tiles.length}  safe=${company.safe}  stock_pool=$pool'),
                 );
               }),
             if (state.mergeContext != null) ...[
@@ -1372,10 +1396,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                   itemCount: _activityLog.length,
                   itemBuilder: (context, index) {
                     final line = _activityLog[index];
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 4),
-                      child: Text(line),
-                    );
+                    return Padding(padding: const EdgeInsets.only(bottom: 4), child: Text(line));
                   },
                 ),
               ),
@@ -1390,21 +1411,63 @@ Color _companyColor(String company) {
   switch (company) {
     case 'Sackson':
       return const Color(0xFFE3B341);
-    case 'Zeta':
+    case 'Worldwide':
+      return const Color(0xFF5B8FF9);
+    case 'American':
+      return const Color(0xFFE67E22);
+    case 'Festival':
+      return const Color(0xFF16A085);
+    case 'Imperial':
+      return const Color(0xFFD35454);
+    case 'Continental':
+      return const Color(0xFF8E5BBE);
+    case 'Tower':
       return const Color(0xFF4E9F6D);
     case 'America':
-      return const Color(0xFF5B8FF9);
+      return const Color(0xFFE67E22);
+    case 'Zeta':
+      return const Color(0xFF4E9F6D);
     case 'Fusion':
       return const Color(0xFFE67E22);
     case 'Hydra':
       return const Color(0xFF16A085);
     case 'Phoenix':
       return const Color(0xFFD35454);
-    case 'Worldwide':
-      return const Color(0xFF8E5BBE);
     default:
       return const Color(0xFF9AA4B2);
   }
+}
+
+int _compareBoardPos(String a, String b) {
+  final pa = _parseBoardPos(a);
+  final pb = _parseBoardPos(b);
+  if (pa == null || pb == null) {
+    return a.compareTo(b);
+  }
+  if (pa.rowIndex != pb.rowIndex) {
+    return pa.rowIndex.compareTo(pb.rowIndex);
+  }
+  return pa.col.compareTo(pb.col);
+}
+
+_BoardPos? _parseBoardPos(String pos) {
+  final match = RegExp(r'^(\d+)([A-Z])$').firstMatch(pos);
+  if (match == null) {
+    return null;
+  }
+  final col = int.tryParse(match.group(1) ?? '');
+  final rowLetter = match.group(2);
+  if (col == null || rowLetter == null || rowLetter.isEmpty) {
+    return null;
+  }
+  return _BoardPos(col: col, rowIndex: rowLetter.codeUnitAt(0) - 'A'.codeUnitAt(0));
+}
+
+class _BoardPos {
+  const _BoardPos({required this.col, required this.rowIndex});
+
+  final int col;
+  final int rowIndex;
 }
 
 String? _boardPosOrNull(int col, int rowIndex, List<String> rows) {
