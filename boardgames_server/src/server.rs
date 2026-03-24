@@ -423,23 +423,19 @@ async fn socket_on_auth(
 
 async fn socket_on_disconnect(socket: SocketRef, state: State<StateRef>) {
     let _req_log = SocketReqLog::new("disconnect", &socket);
-    let (uid, rm) = {
+    let uid = {
         let mut s = state.lock().await;
-        let uid = s.users.remove(socket.id.as_str()).map(|(_, uid)| uid);
-        (uid, s.room_manager.clone())
+        s.users.remove(socket.id.as_str()).map(|(_, uid)| uid)
     };
 
     if let Some(uid) = uid {
-        let emptied = rm.leave_all_rooms_for_user(&uid).await;
-        if !emptied.is_empty() {
-            info!(
-                ns = "socket.io",
-                user_id = %uid,
-                emptied = ?emptied,
-                "rooms auto-cleaned on disconnect"
-            );
-            emit_rooms_updated_to_lobby(&socket, &state).await;
-        }
+        // Keep room membership on transient disconnects (e.g. browser refresh).
+        // Client can re-auth and call join_room again to receive rejoin_sync snapshot.
+        info!(
+            ns = "socket.io",
+            user_id = %uid,
+            "user disconnected; room membership preserved for rejoin"
+        );
     }
 
     info!(ns = "socket.io", ?socket.id, "disconnected");

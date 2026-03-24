@@ -149,29 +149,50 @@ impl Room {
     }
 
     pub async fn set_ready(&self, user: &UserId, ready: bool) -> Result<ReadyStatus, String> {
-        let mut meta = self.meta.lock().await;
-        if !meta.users.contains(user) {
-            return Err("not_in_room".to_string());
+        let (status, should_call_start) = {
+            let mut meta = self.meta.lock().await;
+            if !meta.users.contains(user) {
+                return Err("not_in_room".to_string());
+            }
+
+            if meta.started {
+                return Ok(self.ready_status_from_meta(&meta));
+            }
+
+            if ready {
+                meta.ready_users.insert(user.clone());
+            } else {
+                meta.ready_users.remove(user);
+            }
+
+            let min_players = self.game.descriptor().min_players;
+            let all_ready = !meta.users.is_empty() && meta.ready_users.len() == meta.users.len();
+            let enough_players = meta.users.len() >= min_players;
+            let should_call_start = all_ready && enough_players;
+            if should_call_start {
+                meta.started = true;
+            }
+
+            (self.ready_status_from_meta(&meta), should_call_start)
+        };
+
+        if should_call_start {
+            let mut state_guard = self.state.lock().await;
+            let ctx = ActionCtx {
+                room_id: self.id.clone(),
+                session_id: None,
+                now_ts: chrono::Utc::now().timestamp_millis() as u64,
+                ext: None,
+            };
+
+            if let ActionResult::Err(err) = self.game.on_start(&ctx, state_guard.as_mut()).await {
+                let mut meta = self.meta.lock().await;
+                meta.started = false;
+                return Err(format!("room_start_failed: {err}"));
+            }
         }
 
-        if meta.started {
-            return Ok(self.ready_status_from_meta(&meta));
-        }
-
-        if ready {
-            meta.ready_users.insert(user.clone());
-        } else {
-            meta.ready_users.remove(user);
-        }
-
-        let min_players = self.game.descriptor().min_players;
-        let all_ready = !meta.users.is_empty() && meta.ready_users.len() == meta.users.len();
-        let enough_players = meta.users.len() >= min_players;
-        if all_ready && enough_players {
-            meta.started = true;
-        }
-
-        Ok(self.ready_status_from_meta(&meta))
+        Ok(status)
     }
 
     pub async fn ready_status(&self) -> ReadyStatus {

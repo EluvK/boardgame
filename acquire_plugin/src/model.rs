@@ -63,6 +63,7 @@ pub struct AcquireState {
     pub final_standings: Vec<FinalStanding>,
     pub turn_order: Vec<String>,
     pub current_turn: usize,
+    pub initial_tiles_dealt: bool,
     pub phase: String,
     pub turn_no: u64,
 }

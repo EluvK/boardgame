@@ -138,6 +138,14 @@ pub trait Game: Send + Sync + 'static {
         }
     }
 
+    /// 可选的 lifecycle 钩子：房间满足开局条件并切换为 started 时触发一次
+    async fn on_start(&self, _ctx: &ActionCtx, _state: &mut dyn GameState) -> ActionResult {
+        ActionResult::Ok {
+            events: vec![],
+            broadcasts: vec![],
+        }
+    }
+
     /// 可选的定期 tick（比如计时器）
     async fn on_tick(&self, _ctx: &ActionCtx, _state: &mut dyn GameState) -> Option<ActionResult> {
         None

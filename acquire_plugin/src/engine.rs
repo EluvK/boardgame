@@ -40,6 +40,7 @@ impl AcquireState {
             final_standings: vec![],
             turn_order: vec![],
             current_turn: 0,
+            initial_tiles_dealt: false,
             phase: "place".to_string(),
             turn_no: 1,
         }
@@ -94,6 +95,19 @@ impl AcquireState {
 
     fn can_start(&self) -> bool {
         self.turn_order.len() >= 2
+    }
+
+    fn start_game_if_ready(&mut self) -> bool {
+        if self.initial_tiles_dealt || !self.can_start() {
+            return false;
+        }
+
+        let users = self.turn_order.clone();
+        for user in users {
+            self.refill_player_tiles(&user, 6);
+        }
+        self.initial_tiles_dealt = true;
+        true
     }
 
     fn advance_turn(&mut self) {
@@ -635,16 +649,11 @@ impl Game for AcquireGame {
             }
         };
 
-        let mut game_started = false;
         if !s.players.contains_key(&user) {
             s.players.insert(user.clone(), 6000);
             s.shares.insert(user.clone(), HashMap::new());
             s.player_tiles.insert(user.clone(), HashSet::new());
-            s.refill_player_tiles(&user, 6);
             s.turn_order.push(user.clone());
-            if s.turn_order.len() == 2 {
-                game_started = true;
-            }
         }
 
         ActionResult::Ok {
@@ -655,9 +664,25 @@ impl Game for AcquireGame {
                     "type":"state",
                     "state": s.snapshot_state(),
                     "room": _ctx.room_id,
-                    "event": if game_started { "game_started" } else { "player_joined" }
+                    "event": "player_joined"
                 }),
             }],
+        }
+    }
+
+    async fn on_start(&self, _ctx: &ActionCtx, state: &mut dyn GameState) -> ActionResult {
+        let any = state as &mut dyn std::any::Any;
+        let s = match any.downcast_mut::<AcquireState>() {
+            Some(s) => s,
+            None => {
+                return ActionResult::Err(game::GameError::Internal("state type mismatch".into()));
+            }
+        };
+
+        s.start_game_if_ready();
+        ActionResult::Ok {
+            events: vec![],
+            broadcasts: vec![],
         }
     }
 
@@ -684,7 +709,6 @@ impl Game for AcquireGame {
             s.player_tiles
                 .entry(action.user_id.clone())
                 .or_insert_with(HashSet::new);
-            s.refill_player_tiles(&action.user_id, 6);
             if !s.turn_order.iter().any(|u| u == &action.user_id) {
                 s.turn_order.push(action.user_id.clone());
             }

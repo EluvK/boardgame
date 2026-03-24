@@ -1439,11 +1439,11 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                           children: [
                             ...() {
                               final holding = holdings[company] ?? 0;
-                              final sellShares = _mergeShares.clamp(1, holding);
                               final maxTradeShares = holding - (holding % 2);
-                              final tradeShares = _mergeShares.clamp(2, maxTradeShares);
                               final canSell = canOperate && holding > 0;
                               final canTrade = canOperate && maxTradeShares >= 2;
+                              final sellShares = canSell ? _mergeShares.clamp(1, holding) : 0;
+                              final tradeShares = canTrade ? _mergeShares.clamp(2, maxTradeShares) : 0;
 
                               return [
                                 OutlinedButton(
