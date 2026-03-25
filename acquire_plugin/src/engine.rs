@@ -695,7 +695,8 @@ impl Game for AcquireGame {
                     "type":"state",
                     "state": s.snapshot_state(),
                     "room": _ctx.room_id,
-                    "event": "player_joined"
+                    "event": "player_joined",
+                    "by": user,
                 }),
             }],
         }
@@ -870,6 +871,7 @@ impl Game for AcquireGame {
                         PlacementKind::Merge(_) => {}
                     }
 
+                    let mut bonus_paid: Vec<Value> = vec![];
                     if let PlacementKind::Merge(merge_targets) = placement {
                         let allowed = match s.allowed_merge_survivors(&merge_targets) {
                             Ok(v) => v,
@@ -880,7 +882,6 @@ impl Game for AcquireGame {
 
                         if allowed.len() == 1 {
                             let survivor = allowed[0].clone();
-                            let mut bonus_paid = vec![];
                             for loser in merge_targets.iter().filter(|cid| *cid != &survivor) {
                                 let payouts = s.payout_merge_bonus_for_company(loser);
                                 if !payouts.is_empty() {
@@ -932,7 +933,8 @@ impl Game for AcquireGame {
                         "state": s.snapshot_state(),
                         "by": action.user_id,
                         "event": event,
-                        "placement": placement_label
+                        "placement": placement_label,
+                        "bonus_paid": bonus_paid,
                     });
                     let out = Outbound {
                         target: OutboundTarget::All,
@@ -1072,7 +1074,12 @@ impl Game for AcquireGame {
                     payload: json!({
                         "type":"state",
                         "state": s.snapshot_state(),
-                        "event": "turn_advanced"
+                        "event": "turn_advanced",
+                        "by": action.user_id,
+                        "shares": total_shares,
+                        "purchases": purchase_items,
+                        "cost": total_cost,
+                        "cash_after": cash_after,
                     }),
                 };
 
@@ -1454,16 +1461,27 @@ impl Game for AcquireGame {
 
                 ActionResult::Ok {
                     events: vec![],
-                    broadcasts: vec![Outbound {
-                        target: OutboundTarget::User(action.user_id.clone()),
-                        payload: json!({
-                            "type": "draw_tile_ok",
-                            "user": action.user_id,
-                            "tile": pos,
-                            "hand": s.player_tiles.get(&action.user_id).cloned().unwrap_or_default(),
-                            "remaining": s.tile_bag.len(),
-                        }),
-                    }],
+                    broadcasts: vec![
+                        Outbound {
+                            target: OutboundTarget::User(action.user_id.clone()),
+                            payload: json!({
+                                "type": "draw_tile_ok",
+                                "user": action.user_id,
+                                "tile": pos,
+                                "hand": s.player_tiles.get(&action.user_id).cloned().unwrap_or_default(),
+                                "remaining": s.tile_bag.len(),
+                            }),
+                        },
+                        Outbound {
+                            target: OutboundTarget::All,
+                            payload: json!({
+                                "type": "public_event",
+                                "event": "tile_drawn",
+                                "by": action.user_id,
+                                "remaining": s.tile_bag.len(),
+                            }),
+                        },
+                    ],
                 }
             }
             _ => ActionResult::Err(game::GameError::Invalid("unknown action type".into())),

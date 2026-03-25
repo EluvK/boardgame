@@ -99,6 +99,9 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       } else if (type == 'ready_state') {
         _applyReadyPayload(payload);
         _error = null;
+      } else if (type == 'public_event') {
+        _appendActivityFromPublicEvent(payload);
+        _error = null;
       }
     });
   }
@@ -206,55 +209,6 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
 
   void _appendActivityFromMessage(Map<String, dynamic> payload) {
     final ty = payload['type']?.toString() ?? '';
-    if (ty == 'buy_ok') {
-      final user = payload['user']?.toString();
-      final purchasesRaw = payload['purchases'];
-      final purchases = purchasesRaw is List ? purchasesRaw : const <dynamic>[];
-      final buyLines = <String>[];
-      final companies = <String>[];
-
-      for (final item in purchases) {
-        if (item is! Map) {
-          continue;
-        }
-        final company = item['company']?.toString() ?? '';
-        final shares = _asInt(item['shares']);
-        if (company.isEmpty || shares <= 0) {
-          continue;
-        }
-        companies.add(company);
-        buyLines.add('$company x$shares');
-      }
-
-      _appendActivity(
-        _ActivityEntry(
-          action: buyLines.isEmpty ? '跳过买股' : '买入股票',
-          userId: user,
-          companies: companies,
-          cost: _asInt(payload['cost']),
-          detail: buyLines.isEmpty ? null : buyLines.join('，'),
-          createdAt: DateTime.now(),
-        ),
-      );
-      return;
-    }
-
-    if (ty == 'draw_tile_ok') {
-      final user = payload['user']?.toString();
-      final tile = payload['tile']?.toString() ?? '';
-      final remaining = _asInt(payload['remaining']);
-      _appendActivity(
-        _ActivityEntry(
-          action: '抽牌',
-          userId: user,
-          companies: const <String>[],
-          detail: tile.isEmpty ? null : '抽到 $tile，牌堆剩余 $remaining',
-          createdAt: DateTime.now(),
-        ),
-      );
-      return;
-    }
-
     if (ty == 'ready_state') {
       final readyStateRaw = payload['ready_state'];
       final readyState = readyStateRaw is Map ? readyStateRaw : const <dynamic, dynamic>{};
@@ -269,9 +223,26 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     }
   }
 
+  void _appendActivityFromPublicEvent(Map<String, dynamic> payload) {
+    final event = payload['event']?.toString().trim() ?? '';
+    if (event == 'tile_drawn') {
+      final userId = payload['by']?.toString();
+      final remaining = _asInt(payload['remaining']);
+      _appendActivity(
+        _ActivityEntry(
+          action: '抽牌',
+          userId: userId,
+          companies: const <String>[],
+          detail: '从牌堆抽取 1 张，剩余 $remaining',
+          createdAt: DateTime.now(),
+        ),
+      );
+    }
+  }
+
   void _appendActivityFromEnvelope(AcquireStateEnvelope envelope) {
     final event = envelope.event.trim();
-    if (event.isEmpty || event == 'turn_advanced') {
+    if (event.isEmpty) {
       return;
     }
 
@@ -288,6 +259,37 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
 
     String? detail;
     int? cost;
+    final bonusLines = <String>[];
+    final bonusCompanies = <String>[];
+
+    final bonusRaw = raw['bonus_paid'];
+    final bonusList = bonusRaw is List ? bonusRaw : const <dynamic>[];
+    for (final item in bonusList) {
+      if (item is! Map) {
+        continue;
+      }
+      final company = item['company']?.toString() ?? '';
+      final payoutsRaw = item['payouts'];
+      final payouts = payoutsRaw is List ? payoutsRaw : const <dynamic>[];
+      final payoutDetails = <String>[];
+      for (final p in payouts) {
+        if (p is! Map) {
+          continue;
+        }
+        final uid = p['user']?.toString() ?? '';
+        final amount = _asInt(p['amount']);
+        if (uid.isEmpty || amount <= 0) {
+          continue;
+        }
+        payoutDetails.add('${_playerDisplayName(uid)} +\$$amount');
+      }
+      if (company.isNotEmpty && payoutDetails.isNotEmpty) {
+        bonusLines.add('$company: ${payoutDetails.join(', ')}');
+        if (!bonusCompanies.contains(company)) {
+          bonusCompanies.add(company);
+        }
+      }
+    }
 
     final placement = envelope.placement?.trim() ?? '';
     if (placement.isNotEmpty) {
@@ -330,6 +332,38 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       if (winner.isNotEmpty) {
         detail = '胜者: ${_playerDisplayName(winner)}';
       }
+    } else if (event == 'bonus_paid') {
+      if (bonusLines.isNotEmpty) {
+        detail = bonusLines.join('；');
+      }
+      for (final c in bonusCompanies) {
+        if (!companies.contains(c)) {
+          companies.add(c);
+        }
+      }
+    } else if (event == 'turn_advanced') {
+      final purchasesRaw = raw['purchases'];
+      final purchases = purchasesRaw is List ? purchasesRaw : const <dynamic>[];
+      final buyLines = <String>[];
+      for (final item in purchases) {
+        if (item is! Map) {
+          continue;
+        }
+        final company = item['company']?.toString() ?? '';
+        final shares = _asInt(item['shares']);
+        if (company.isEmpty || shares <= 0) {
+          continue;
+        }
+        if (!companies.contains(company)) {
+          companies.add(company);
+        }
+        buyLines.add('$company x$shares');
+      }
+      final purchaseCost = _asInt(raw['cost']);
+      if (purchaseCost > 0) {
+        cost = purchaseCost;
+      }
+      detail = buyLines.isEmpty ? '本回合买股 0 股' : buyLines.join('，');
     }
 
     _appendActivity(
@@ -342,12 +376,26 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         createdAt: DateTime.now(),
       ),
     );
+
+    if (event != 'bonus_paid' && bonusLines.isNotEmpty) {
+      _appendActivity(
+        _ActivityEntry(
+          action: _eventLabel('bonus_paid'),
+          userId: envelope.by,
+          companies: bonusCompanies,
+          detail: bonusLines.join('；'),
+          createdAt: DateTime.now(),
+        ),
+      );
+    }
   }
 
   String _eventLabel(String event) {
     switch (event) {
       case 'place_ok':
         return '落子';
+      case 'player_joined':
+        return '加入房间';
       case 'company_expanded':
         return '扩张公司';
       case 'choose_company_required':
@@ -376,6 +424,8 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         return '最终结算';
       case 'game_started':
         return '游戏开始';
+      case 'turn_advanced':
+        return '完成买股';
       default:
         return event;
     }
@@ -517,12 +567,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     final myPendingMergeCompanies = state == null
         ? const <String>[]
         : ((state.mergeSettlement?.pending[widget.session.userId] ?? const <String>{}).toList()..sort());
-    final canActNow =
-        state != null &&
-        _roomStarted &&
-        !_busy &&
-        !_leaving &&
-        (isMyTurn || (state.phase == 'merge_stock_decision' && myPendingMergeCompanies.isNotEmpty));
+    final canActNow = state != null && _roomStarted && !_busy && !_leaving && isMyTurn;
 
     return Scaffold(
       appBar: AppBar(title: Text('Room: ${widget.session.roomId}')),
@@ -613,7 +658,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       border = const Color(0xFFD0D7E5);
       fg = const Color(0xFF475467);
       icon = Icons.sync;
-    } else if (state.phase == 'merge_stock_decision' && myPendingMergeCompanies.isNotEmpty) {
+    } else if (state.phase == 'merge_stock_decision' && isMyTurn && myPendingMergeCompanies.isNotEmpty) {
       message = 'Your turn to decide merge stocks: ${myPendingMergeCompanies.join(', ')}.';
       bg = const Color(0xFFE7F9F8);
       border = const Color(0xFF9EDFD9);
@@ -633,15 +678,10 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       icon = Icons.play_circle_outline;
     } else {
       if (state.phase == 'merge_stock_decision') {
-        final pendingUsers =
-            (state.mergeSettlement?.pending.entries
-                      .where((entry) => entry.value.isNotEmpty)
-                      .map((entry) => entry.key)
-                      .toList() ??
-                  <String>[])
-              ..sort();
-        final target = pendingUsers.isEmpty ? 'pending players' : pendingUsers.join(', ');
-        message = 'Waiting for $target to decide merge stocks.';
+        final decider = state.currentPlayer == null ? '' : _playerDisplayName(state.currentPlayer!);
+        message = decider.isEmpty
+            ? 'Waiting for merge stock decisions.'
+            : 'Waiting for $decider to decide merge stocks.';
       } else {
         message = switch (state.phase) {
           'place' => 'Waiting for ${state.currentPlayer} to place a tile.',
@@ -1233,8 +1273,25 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
             if (myPhase == 'buy' && isMyTurn) _buildBuyPanel(theme, state, canOperate),
             if (myPhase == 'choose_company' && isMyTurn) _buildChooseCompanyPanel(theme, state, canOperate),
             if (myPhase == 'resolve_merge' && isMyTurn) _buildResolveMergePanel(theme, state, canOperate),
-            if (myPhase == 'merge_stock_decision' && myPendingMergeCompanies.isNotEmpty)
+            if (myPhase == 'merge_stock_decision' && isMyTurn && myPendingMergeCompanies.isNotEmpty)
               _buildMergeStockDecisionPanel(theme, state, canOperate, myPendingMergeCompanies),
+            if (myPhase == 'merge_stock_decision' && !isMyTurn && myPendingMergeCompanies.isNotEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFD0D7E5)),
+                ),
+                child: Text(
+                  'Waiting for ${_playerDisplayName(state.currentPlayer)} to complete merge stock decisions.',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: const Color(0xFF475467),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
             const SizedBox(height: 12),
             const Divider(height: 1, thickness: 2),
             const SizedBox(height: 10),
@@ -1875,7 +1932,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
               final displayName = _playerDisplayName(uid);
               final cash = entry.value;
               final holding = state.shares[uid] ?? const <String, int>{};
-              final nonZero = holding.entries.where((e) => e.value > 0).toList()
+              final nonZero = holding.entries.where((e) => e.value != 0).toList()
                 ..sort((a, b) => a.key.compareTo(b.key));
               final isMe = uid == widget.session.userId;
               final isTurn = state.currentPlayer == uid;
@@ -2068,6 +2125,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
               ...companies.map((entry) {
                 final id = entry.key;
                 final company = entry.value;
+                final tier = _companyTier(id);
                 final pool = state.stockPool[id] ?? 0;
                 final size = company.tiles.length;
                 final price = _companySharePrice(state, id);
@@ -2110,6 +2168,8 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                                   ),
                                 ),
                               ),
+                            const SizedBox(width: 6),
+                            metricChip('tier', '$tier', tint: color),
                             const SizedBox(width: 6),
                             metricChip('size', '$size', tint: color),
                           ],
