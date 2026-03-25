@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'dart:async';
 
 import '../api/lobby_api.dart';
@@ -15,6 +16,10 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  static const String _serverUrlFromDefine = String.fromEnvironment('LOBBY_SERVER_URL', defaultValue: '');
+  static const String _debugDefaultServerUrl = 'http://127.0.0.1:17980';
+  static const String _releaseDefaultServerUrl = 'https://your-production-server.example.com';
+
   final _serverCtrl = TextEditingController(text: 'http://127.0.0.1:17980');
   final _userNameCtrl = TextEditingController(text: 'web-user');
   final _roomIdCtrl = TextEditingController(text: 'room_001');
@@ -29,7 +34,9 @@ class _HomePageState extends State<HomePage> {
   bool _autoJoinOnCreate = true;
 
   String _message = 'Ready';
+  String _messageTone = 'info';
   String? _deviceId;
+  DateTime? _lastLobbySyncAt;
 
   List<RegisteredGame> _games = const [];
   List<RoomSummary> _rooms = const [];
@@ -49,8 +56,22 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       _deviceId = profile.deviceId;
       _userNameCtrl.text = profile.userName;
-      _serverCtrl.text = profile.serverUrl;
+      _serverCtrl.text = _resolveInitialServerUrl(profile.serverUrl);
     });
+  }
+
+  String _resolveInitialServerUrl(String? savedServerUrl) {
+    final saved = savedServerUrl?.trim() ?? '';
+    if (saved.isNotEmpty) {
+      return saved;
+    }
+
+    final fromDefine = _serverUrlFromDefine.trim();
+    if (fromDefine.isNotEmpty) {
+      return fromDefine;
+    }
+
+    return kReleaseMode ? _releaseDefaultServerUrl : _debugDefaultServerUrl;
   }
 
   @override
@@ -81,6 +102,7 @@ class _HomePageState extends State<HomePage> {
       }
       setState(() {
         _message = 'Error: $e';
+        _messageTone = 'error';
       });
     } finally {
       if (mounted) {
@@ -115,6 +137,7 @@ class _HomePageState extends State<HomePage> {
         _connected = true;
         _authed = true;
         _message = 'Connected and authenticated';
+        _messageTone = 'success';
       });
 
       await _refreshGamesAndRooms();
@@ -132,6 +155,8 @@ class _HomePageState extends State<HomePage> {
       _rooms = const [];
       _selectedGameId = null;
       _message = 'Disconnected';
+      _messageTone = 'info';
+      _lastLobbySyncAt = null;
     });
   }
 
@@ -154,6 +179,7 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         _authed = true;
         _message = 'Name updated';
+        _messageTone = 'success';
       });
     });
   }
@@ -176,6 +202,8 @@ class _HomePageState extends State<HomePage> {
       _rooms = rooms;
       _selectedGameId = _resolveSelectedGame(games, _selectedGameId);
       _message = 'Fetched ${games.length} games, ${rooms.length} rooms';
+      _messageTone = 'info';
+      _lastLobbySyncAt = DateTime.now();
     });
   }
 
@@ -188,6 +216,8 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         _rooms = rooms;
         _message = 'Lobby updated: ${rooms.length} rooms';
+        _messageTone = 'info';
+        _lastLobbySyncAt = DateTime.now();
       });
     });
   }
@@ -215,6 +245,7 @@ class _HomePageState extends State<HomePage> {
           _games = games;
           _rooms = rooms;
           _selectedGameId = _resolveSelectedGame(games, _selectedGameId);
+          _lastLobbySyncAt = DateTime.now();
         });
       } catch (_) {
         // Auto refresh should be best-effort and never interrupt user actions.
@@ -259,6 +290,7 @@ class _HomePageState extends State<HomePage> {
       }
       setState(() {
         _message = 'Room "$roomId" created';
+        _messageTone = 'success';
       });
     });
   }
@@ -283,6 +315,7 @@ class _HomePageState extends State<HomePage> {
       _openRoomDetail(roomId: roomId, gameId: resolvedGameId);
       setState(() {
         _message = 'Joined room "$roomId"';
+        _messageTone = 'success';
       });
     });
   }
@@ -301,6 +334,7 @@ class _HomePageState extends State<HomePage> {
       }
       setState(() {
         _message = 'Left room "$roomId"';
+        _messageTone = 'info';
       });
     });
   }
@@ -321,7 +355,8 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
-    final resolvedGameId = gameId ??
+    final resolvedGameId =
+        gameId ??
         _rooms
             .where((r) => r.id == roomId)
             .map((r) => r.gameId)
@@ -330,13 +365,8 @@ class _HomePageState extends State<HomePage> {
 
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => RoomDetailPage(
-          roomId: roomId,
-          gameId: resolvedGameId,
-          userId: userId,
-          api: api,
-          onLeaveRoom: _leaveRoom,
-        ),
+        builder: (_) =>
+            RoomDetailPage(roomId: roomId, gameId: resolvedGameId, userId: userId, api: api, onLeaveRoom: _leaveRoom),
       ),
     );
   }
@@ -355,6 +385,10 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final lastSync = _lastLobbySyncAt;
+    final lastSyncText = lastSync == null
+        ? 'Not synced yet'
+        : 'Updated ${lastSync.hour.toString().padLeft(2, '0')}:${lastSync.minute.toString().padLeft(2, '0')}:${lastSync.second.toString().padLeft(2, '0')}';
 
     return Scaffold(
       appBar: AppBar(elevation: 0, title: const Text('Boardgame Web Lobby')),
@@ -374,6 +408,8 @@ class _HomePageState extends State<HomePage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  _buildHero(theme, lastSyncText),
+                  const SizedBox(height: 12),
                   _buildConnectionCard(theme),
                   const SizedBox(height: 12),
                   _buildLobbyCard(theme),
@@ -390,6 +426,58 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Widget _buildHero(ThemeData theme, String lastSyncText) {
+    Widget statusPill(String label, bool active, {Color? activeColor}) {
+      final color = activeColor ?? const Color(0xFF1769AA);
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: active ? color.withValues(alpha: 0.16) : const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: active ? color.withValues(alpha: 0.45) : const Color(0xFFD1D5DB)),
+        ),
+        child: Text(
+          label,
+          style: theme.textTheme.labelMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+            color: active ? color : const Color(0xFF475467),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFFE7F5FF), Color(0xFFEFFAF5)],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFBFD8F3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Lobby Control Center', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              statusPill('1. Connected', _connected, activeColor: const Color(0xFF1D4ED8)),
+              statusPill('2. Authenticated', _authed, activeColor: const Color(0xFF0F766E)),
+              statusPill('3. Ready to Play', _connected && _authed, activeColor: const Color(0xFF027A48)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(lastSyncText, style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF475467))),
+        ],
+      ),
+    );
+  }
+
   Widget _buildConnectionCard(ThemeData theme) {
     return Card(
       elevation: 1,
@@ -400,8 +488,10 @@ class _HomePageState extends State<HomePage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Server Connection', style: theme.textTheme.titleLarge),
-            const SizedBox(height: 4),
-            Text('Socket path is fixed to /socket.io', style: theme.textTheme.bodySmall),
+            // const SizedBox(height: 4),
+            // Text('Socket path is fixed to /socket.io', style: theme.textTheme.bodySmall),
+            // const SizedBox(height: 2),
+            // Text('Override: --dart-define=LOBBY_SERVER_URL=...', style: theme.textTheme.bodySmall),
             const SizedBox(height: 8),
             TextField(
               controller: _serverCtrl,
@@ -417,7 +507,11 @@ class _HomePageState extends State<HomePage> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                ElevatedButton(onPressed: _busy ? null : _connect, child: const Text('Connect')),
+                ElevatedButton.icon(
+                  onPressed: _busy ? null : _connect,
+                  icon: const Icon(Icons.power_settings_new),
+                  label: Text(_connected ? 'Reconnect' : 'Connect'),
+                ),
                 OutlinedButton(onPressed: _busy ? null : _disconnect, child: const Text('Disconnect')),
                 OutlinedButton(
                   onPressed: _busy || !_connected ? null : _reauthWithNewName,
@@ -427,7 +521,13 @@ class _HomePageState extends State<HomePage> {
                   onPressed: _busy ? null : () => _runTask(_refreshGamesAndRooms),
                   child: const Text('Refresh'),
                 ),
-                Text(_connected ? 'Connected' : 'Offline'),
+                Text(
+                  _connected ? (_authed ? 'Online + Authed' : 'Online') : 'Offline',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: _connected ? const Color(0xFF027A48) : const Color(0xFF667085),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ],
             ),
           ],
@@ -471,17 +571,55 @@ class _HomePageState extends State<HomePage> {
             Text('Rooms', style: theme.textTheme.titleLarge),
             const SizedBox(height: 8),
             if (_rooms.isEmpty)
-              const Text('No room available')
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFD0D7E5)),
+                ),
+                child: const Text('No room available. Create one to get started.'),
+              )
             else
               Column(
-                children: _rooms
-                    .map(
-                      (r) => ListTile(
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                        title: Text('${r.id}   game=${r.gameId}'),
-                        subtitle: Text('players: ${r.playerCount}'),
-                        trailing: OutlinedButton(
+                children: _rooms.map((r) {
+                  final playerCount = r.playerCount;
+                  final crowded = playerCount >= 4;
+                  final accent = crowded ? const Color(0xFFB42318) : const Color(0xFF027A48);
+                  return Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFD0D7E5)),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: InkWell(
+                            onTap: () => _openRoomDetail(roomId: r.id, gameId: r.gameId),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(r.id, style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+                                const SizedBox(height: 4),
+                                Wrap(
+                                  spacing: 6,
+                                  runSpacing: 6,
+                                  children: [
+                                    _buildMiniTag('game', r.gameId),
+                                    _buildMiniTag('players', '$playerCount', tint: accent),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        OutlinedButton(
                           onPressed: _busy
                               ? null
                               : () {
@@ -490,10 +628,10 @@ class _HomePageState extends State<HomePage> {
                                 },
                           child: const Text('Join'),
                         ),
-                        onTap: () => _openRoomDetail(roomId: r.id, gameId: r.gameId),
-                      ),
-                    )
-                    .toList(),
+                      ],
+                    ),
+                  );
+                }).toList(),
               ),
           ],
         ),
@@ -533,7 +671,11 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
             const SizedBox(height: 8),
-            ElevatedButton(onPressed: _busy ? null : _createRoom, child: const Text('Create Room')),
+            ElevatedButton.icon(
+              onPressed: _busy ? null : _createRoom,
+              icon: const Icon(Icons.add_box_outlined),
+              label: const Text('Create Room'),
+            ),
             const Divider(height: 24),
             TextField(
               controller: _joinRoomCtrl,
@@ -548,14 +690,48 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildStatus(ThemeData theme) {
+    final isError = _messageTone == 'error' || _message.startsWith('Error:');
+    final isSuccess = _messageTone == 'success';
+    final bg = isError ? const Color(0xFFFEF3F2) : (isSuccess ? const Color(0xFFEAF7EF) : const Color(0xFFF8FAFC));
+    final border = isError ? const Color(0xFFFDA29B) : (isSuccess ? const Color(0xFFA6D8B8) : const Color(0xFFD5E3F7));
+    final fg = isError ? const Color(0xFFB42318) : (isSuccess ? const Color(0xFF027A48) : const Color(0xFF344054));
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: bg,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFD5E3F7)),
+        border: Border.all(color: border),
       ),
-      child: Text(_message, style: theme.textTheme.bodyLarge),
+      child: Row(
+        children: [
+          Icon(
+            isError ? Icons.error_outline : (isSuccess ? Icons.check_circle_outline : Icons.info_outline),
+            color: fg,
+            size: 18,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(_message, style: theme.textTheme.bodyLarge?.copyWith(color: fg)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMiniTag(String label, String value, {Color? tint}) {
+    final fg = tint ?? const Color(0xFF475467);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: fg.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: fg.withValues(alpha: 0.35)),
+      ),
+      child: Text(
+        '$label $value',
+        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: fg),
+      ),
     );
   }
 }
