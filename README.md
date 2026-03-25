@@ -2,6 +2,8 @@
 
 一个基于 Rust + Flutter 的多人联机桌游项目，当前已经实现 Acquire 游戏的核心玩法与基本交互。
 
+已部署网站: https://boardgame.508071.xyz/
+
 ## 项目简介
 
 本仓库包含：
