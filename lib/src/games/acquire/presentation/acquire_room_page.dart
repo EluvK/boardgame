@@ -261,6 +261,9 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     int? cost;
     final bonusLines = <String>[];
     final bonusCompanies = <String>[];
+    final liquidationLines = <String>[];
+    final liquidationCompanies = <String>[];
+    var liquidationTotal = 0;
 
     final bonusRaw = raw['bonus_paid'];
     final bonusList = bonusRaw is List ? bonusRaw : const <dynamic>[];
@@ -312,6 +315,39 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       }
     }
 
+    final liquidationRaw = raw['share_liquidation'];
+    final liquidationList = liquidationRaw is List ? liquidationRaw : const <dynamic>[];
+    for (final item in liquidationList) {
+      if (item is! Map) {
+        continue;
+      }
+      final uid = item['user']?.toString() ?? '';
+      final total = _asInt(item['total']);
+      final itemListRaw = item['items'];
+      final itemList = itemListRaw is List ? itemListRaw : const <dynamic>[];
+      final itemDetails = <String>[];
+      for (final liq in itemList) {
+        if (liq is! Map) {
+          continue;
+        }
+        final company = liq['company']?.toString() ?? '';
+        final shares = _asInt(liq['shares']);
+        final amount = _asInt(liq['amount']);
+        if (company.isEmpty || shares <= 0 || amount <= 0) {
+          continue;
+        }
+        itemDetails.add('$company x$shares -> \$$amount');
+        if (!liquidationCompanies.contains(company)) {
+          liquidationCompanies.add(company);
+        }
+      }
+      if (uid.isEmpty || total <= 0 || itemDetails.isEmpty) {
+        continue;
+      }
+      liquidationTotal += total;
+      liquidationLines.add('${_playerDisplayName(uid)} +\$$total (${itemDetails.join(', ')})');
+    }
+
     if (event == 'shares_sold') {
       final soldShares = _asInt(raw['sold_shares']);
       final soldCash = _asInt(raw['sold_cash']);
@@ -329,8 +365,15 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       }
     } else if (event == 'final_scored') {
       final winner = raw['winner']?.toString() ?? '';
+      final segments = <String>[];
       if (winner.isNotEmpty) {
-        detail = '胜者: ${_playerDisplayName(winner)}';
+        segments.add('胜者: ${_playerDisplayName(winner)}');
+      }
+      if (liquidationTotal > 0) {
+        segments.add('清算总额: \$$liquidationTotal');
+      }
+      if (segments.isNotEmpty) {
+        detail = segments.join('；');
       }
     } else if (event == 'bonus_paid') {
       if (bonusLines.isNotEmpty) {
@@ -388,6 +431,18 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         ),
       );
     }
+
+    if (liquidationLines.isNotEmpty) {
+      _appendActivity(
+        _ActivityEntry(
+          action: _eventLabel('share_liquidation'),
+          userId: envelope.by,
+          companies: liquidationCompanies,
+          detail: liquidationLines.join('；'),
+          createdAt: DateTime.now(),
+        ),
+      );
+    }
   }
 
   String _eventLabel(String event) {
@@ -418,6 +473,8 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         return '并购结算完成';
       case 'bonus_paid':
         return '并购奖励发放';
+      case 'share_liquidation':
+        return '持股清算';
       case 'end_declared':
         return '宣布结束游戏';
       case 'final_scored':
@@ -2039,8 +2096,14 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                     children: [
                       metricChip('#', '$rank', tint: const Color(0xFF7C3AED)),
                       const SizedBox(width: 6),
-                      Expanded(child: Text(f.userId, style: theme.textTheme.bodyMedium)),
-                      metricChip('cash', '${f.cash}', tint: const Color(0xFF027A48)),
+                      Expanded(child: Text(_playerDisplayName(f.userId), style: theme.textTheme.bodyMedium)),
+                      Text(
+                        '\$${f.cash}',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: const Color(0xFF027A48),
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
                     ],
                   ),
                 );

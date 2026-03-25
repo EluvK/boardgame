@@ -522,26 +522,55 @@ impl AcquireState {
         has_active && all_safe && no_new_company_possible
     }
 
-    fn settle_endgame(&mut self) {
+    fn settle_endgame(&mut self) -> (Vec<Value>, Vec<Value>) {
+        let mut bonus_paid: Vec<Value> = vec![];
         let company_ids: Vec<String> = self.companies.keys().cloned().collect();
         for cid in &company_ids {
-            self.payout_merge_bonus_for_company(cid);
+            let payouts = self.payout_merge_bonus_for_company(cid);
+            if !payouts.is_empty() {
+                bonus_paid.push(json!({
+                    "company": cid,
+                    "payouts": payouts
+                        .into_iter()
+                        .map(|(user, amount)| json!({"user": user, "amount": amount}))
+                        .collect::<Vec<Value>>()
+                }));
+            }
         }
 
+        let mut liquidation_paid: Vec<Value> = vec![];
         let users: Vec<String> = self.players.keys().cloned().collect();
         for uid in &users {
             let holdings = self.shares.get(uid).cloned().unwrap_or_default();
             let mut liquidation = 0i64;
+            let mut liquidation_detail: Vec<Value> = vec![];
             for (cid, qty) in holdings {
                 if qty <= 0 {
                     continue;
                 }
                 if self.companies.contains_key(&cid) {
-                    liquidation += qty * self.company_share_price(&cid);
+                    let unit_price = self.company_share_price(&cid);
+                    let amount = qty * unit_price;
+                    if amount > 0 {
+                        liquidation += amount;
+                        liquidation_detail.push(json!({
+                            "company": cid,
+                            "shares": qty,
+                            "unit_price": unit_price,
+                            "amount": amount,
+                        }));
+                    }
                 }
                 self.set_share_count(uid, &cid, 0);
             }
             *self.players.entry(uid.clone()).or_insert(0) += liquidation;
+            if !liquidation_detail.is_empty() {
+                liquidation_paid.push(json!({
+                    "user": uid,
+                    "total": liquidation,
+                    "items": liquidation_detail,
+                }));
+            }
         }
 
         let mut rank: Vec<FinalStanding> = self
@@ -560,6 +589,8 @@ impl AcquireState {
         self.final_standings = rank;
         self.game_over = true;
         self.phase = "game_over".to_string();
+
+        (bonus_paid, liquidation_paid)
     }
 
     fn apply_merge(
@@ -1413,7 +1444,7 @@ impl Game for AcquireGame {
                     ));
                 }
 
-                s.settle_endgame();
+                let (bonus_paid, share_liquidation) = s.settle_endgame();
                 let winner = s
                     .final_standings
                     .first()
@@ -1438,7 +1469,9 @@ impl Game for AcquireGame {
                                 "type": "state",
                                 "state": s.snapshot_state(),
                                 "event": "final_scored",
-                                "winner": winner
+                                "winner": winner,
+                                "bonus_paid": bonus_paid,
+                                "share_liquidation": share_liquidation,
                             }),
                         },
                     ],
