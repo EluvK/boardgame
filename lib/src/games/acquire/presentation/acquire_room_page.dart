@@ -35,6 +35,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
   String? _lastAutoPassBuyKey;
   bool? _roomStateCollapsed = false;
   bool? _roomStateAutoCollapsed = false;
+  final Map<String, String> _playerNamesById = {};
 
   @override
   void initState() {
@@ -89,7 +90,10 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
 
     setState(() {
       final type = payload['type']?.toString() ?? '';
-      if (type == 'state') {
+      if (type == 'room_context') {
+        _mergePlayerNamesMap(payload['player_names']);
+        _error = null;
+      } else if (type == 'state') {
         _applyStatePayload(payload);
         _error = null;
       } else if (type == 'ready_state') {
@@ -106,7 +110,9 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
 
     final ty = payload['type']?.toString() ?? 'message';
     setState(() {
-      if (ty == 'ready_state') {
+      if (ty == 'room_context') {
+        _mergePlayerNamesMap(payload['player_names']);
+      } else if (ty == 'ready_state') {
         _applyReadyPayload(payload);
       }
       _activityLog.insert(0, '$ty: ${payload.toString()}');
@@ -137,6 +143,28 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     }
     _roomStarted = nextRoomStarted;
     _isReady = _readyUsers.contains(widget.session.userId);
+  }
+
+  void _mergePlayerNamesMap(dynamic rawMap) {
+    if (rawMap is! Map) {
+      return;
+    }
+
+    for (final entry in rawMap.entries) {
+      final id = entry.key.toString().trim();
+      final name = entry.value?.toString().trim() ?? '';
+      if (id.isNotEmpty && name.isNotEmpty) {
+        _playerNamesById[id] = name;
+      }
+    }
+  }
+
+  String _playerDisplayName(String uid) {
+    final mapped = _playerNamesById[uid]?.trim();
+    if (mapped != null && mapped.isNotEmpty) {
+      return mapped;
+    }
+    return uid;
   }
 
   void _applyStatePayload(Map<String, dynamic> payload) {
@@ -423,11 +451,12 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       icon = Icons.play_circle_outline;
     } else {
       if (state.phase == 'merge_stock_decision') {
-        final pendingUsers = (state.mergeSettlement?.pending.entries
-                    .where((entry) => entry.value.isNotEmpty)
-                    .map((entry) => entry.key)
-                    .toList() ??
-                <String>[])
+        final pendingUsers =
+            (state.mergeSettlement?.pending.entries
+                      .where((entry) => entry.value.isNotEmpty)
+                      .map((entry) => entry.key)
+                      .toList() ??
+                  <String>[])
               ..sort();
         final target = pendingUsers.isEmpty ? 'pending players' : pendingUsers.join(', ');
         message = 'Waiting for $target to decide merge stocks.';
@@ -1083,22 +1112,6 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     final insufficientCash = estimatedAfterCash < 0;
     final selectedSummary = _buyPlan.entries.where((e) => e.value > 0).map((e) => '${e.key} x${e.value}').toList();
 
-    Widget metricChip(String label, String value, {Color? tint}) {
-      final fg = tint ?? const Color(0xFF334155);
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: fg.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: fg.withValues(alpha: 0.3)),
-        ),
-        child: Text(
-          '$label $value',
-          style: theme.textTheme.labelSmall?.copyWith(color: fg, fontWeight: FontWeight.w700),
-        ),
-      );
-    }
-
     if (purchasable.isEmpty) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1113,22 +1126,22 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Text('Buy Shares', style: theme.textTheme.titleMedium),
-            const Spacer(),
-            metricChip('shares', '$totalPlanned/3', tint: totalPlanned == 3 ? const Color(0xFF0A7E8C) : null),
-            const SizedBox(width: 6),
-            metricChip('cash', '$myCash', tint: const Color(0xFF027A48)),
-          ],
+        Row(children: [Text('Buy Shares', style: theme.textTheme.titleMedium)]),
+        const SizedBox(height: 6),
+        Text(
+          '当前现金 \$$myCash  -  消耗现金 \$$estimatedCost  =  剩余现金 \$$estimatedAfterCash',
+          style: theme.textTheme.titleSmall?.copyWith(
+            color: insufficientCash ? const Color(0xFFB42318) : const Color(0xFF027A48),
+            fontWeight: FontWeight.w800,
+          ),
         ),
         const SizedBox(height: 8),
         ...purchasable.map((company) {
           final pool = state.stockPool[company] ?? 0;
+          final myHolding = (state.shares[widget.session.userId] ?? const <String, int>{})[company] ?? 0;
           final current = _buyPlan[company] ?? 0;
           final maxForCompany = pool.clamp(0, 3);
           final unitPrice = _companySharePrice(state, company);
-          final subTotal = unitPrice * current;
           final canIncrease = canOperate && canAddMore && current < maxForCompany;
           final canDecrease = canOperate && current > 0;
           final allInTarget = maxForCompany;
@@ -1157,17 +1170,35 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                         ),
                       ),
                     ),
-                    metricChip('subtotal', '$subTotal', tint: const Color(0xFF475467)),
                   ],
                 ),
                 const SizedBox(height: 6),
                 Wrap(
-                  spacing: 6,
+                  spacing: 12,
                   runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    metricChip('pool', '$pool'),
-                    metricChip('price', '$unitPrice'),
-                    metricChip('max', '$maxForCompany'),
+                    Text(
+                      '\$$unitPrice',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: const Color(0xFF0F172A),
+                      ),
+                    ),
+                    Text(
+                      '剩余 $pool 股',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: const Color(0xFF334155),
+                      ),
+                    ),
+                    Text(
+                      '已持有 $myHolding 股',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: const Color(0xFF475467),
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 6),
@@ -1224,50 +1255,35 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
             ),
           );
         }),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF8FAFC),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: const Color(0xFFD0D7E5)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  metricChip('selected', '$totalPlanned/3', tint: totalPlanned == 3 ? const Color(0xFF0A7E8C) : null),
-                  metricChip('cost', '$estimatedCost'),
-                  metricChip(
-                    'after',
-                    '$estimatedAfterCash',
-                    tint: insufficientCash ? const Color(0xFFB42318) : const Color(0xFF027A48),
+        if (selectedSummary.isNotEmpty || insufficientCash)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFFD0D7E5)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (selectedSummary.isNotEmpty)
+                  Text(
+                    selectedSummary.join(', '),
+                    style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF475467)),
                   ),
-                ],
-              ),
-              if (selectedSummary.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Text(
-                  selectedSummary.join(', '),
-                  style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF475467)),
-                ),
-              ],
-              if (insufficientCash) ...[
-                const SizedBox(height: 6),
-                Text(
-                  'Not enough cash for current selection.',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: const Color(0xFFB42318),
-                    fontWeight: FontWeight.w700,
+                if (selectedSummary.isNotEmpty && insufficientCash) const SizedBox(height: 6),
+                if (insufficientCash)
+                  Text(
+                    'Not enough cash for current selection.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: const Color(0xFFB42318),
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
-                ),
               ],
-            ],
+            ),
           ),
-        ),
         const SizedBox(height: 8),
         Row(
           children: [
@@ -1343,18 +1359,12 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
               ),
               onPressed: canOperate
                   ? () => _runAction(
-                      () => _client.chooseCompany(
-                        room: widget.session.roomId,
-                        userId: widget.session.userId,
-                        company: c,
-                      ),
+                      () =>
+                          _client.chooseCompany(room: widget.session.roomId, userId: widget.session.userId, company: c),
                     )
                   : null,
               icon: Icon(Icons.circle, size: 12, color: tint),
-              label: Text(
-                '$c  L$tier',
-                style: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
-              ),
+              label: Text('$c  L$tier', style: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800)),
             );
           }).toList(),
         ),
@@ -1628,6 +1638,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
             const SizedBox(height: 8),
             ...players.map((entry) {
               final uid = entry.key;
+              final displayName = _playerDisplayName(uid);
               final cash = entry.value;
               final holding = state.shares[uid] ?? const <String, int>{};
               final nonZero = holding.entries.where((e) => e.value > 0).toList()
@@ -1655,7 +1666,10 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                       Row(
                         children: [
                           Expanded(
-                            child: Text(uid, style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800)),
+                            child: Text(
+                              displayName,
+                              style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                            ),
                           ),
                           if (isMe)
                             Container(
@@ -1692,10 +1706,10 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        'cash $cash',
-                        style: theme.textTheme.bodySmall?.copyWith(
+                        '\$$cash',
+                        style: theme.textTheme.titleMedium?.copyWith(
                           color: const Color(0xFF027A48),
-                          fontWeight: FontWeight.w700,
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
                       const SizedBox(height: 6),
@@ -1852,16 +1866,30 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                                   ),
                                 ),
                               ),
+                            const SizedBox(width: 6),
+                            metricChip('size', '$size', tint: color),
                           ],
                         ),
                         const SizedBox(height: 6),
                         Wrap(
-                          spacing: 6,
+                          spacing: 12,
                           runSpacing: 6,
+                          crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
-                            metricChip('size', '$size', tint: color),
-                            metricChip('pool', '$pool'),
-                            metricChip('price', '$price'),
+                            Text(
+                              '\$$price',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                color: const Color(0xFF0F172A),
+                              ),
+                            ),
+                            Text(
+                              '剩余 $pool 股',
+                              style: theme.textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: const Color(0xFF334155),
+                              ),
+                            ),
                           ],
                         ),
                       ],

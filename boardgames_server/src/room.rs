@@ -136,6 +136,12 @@ impl Room {
         self.meta.lock().await.users.len()
     }
 
+    pub async fn users(&self) -> Vec<UserId> {
+        let mut users: Vec<UserId> = self.meta.lock().await.users.iter().cloned().collect();
+        users.sort();
+        users
+    }
+
     pub async fn has_user(&self, user: &UserId) -> bool {
         self.meta.lock().await.users.contains(user)
     }

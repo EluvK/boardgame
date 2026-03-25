@@ -58,6 +58,8 @@ pub struct SetReadyReq {
 pub struct ServerState {
     /// map socket_id -> (SocketRef, user_id)
     pub users: HashMap<String, (SocketRef, String)>,
+    /// map user_id -> last known display name
+    pub user_profiles: HashMap<String, String>,
     pub room_manager: Arc<RoomManager>,
 }
 
@@ -65,6 +67,7 @@ impl ServerState {
     pub fn new(room_manager: Arc<RoomManager>) -> Self {
         Self {
             users: HashMap::new(),
+            user_profiles: HashMap::new(),
             room_manager,
         }
     }
@@ -321,6 +324,7 @@ async fn socket_on_create_room(
                 let res = room.join(uid).await;
                 if let ActionResult::Ok { broadcasts, .. } = res {
                     dispatch_broadcasts(&socket, &state, &req.room, broadcasts).await;
+                    emit_room_context_to_room(&socket, &state, &req.room).await;
                 }
             }
 
@@ -411,6 +415,11 @@ async fn socket_on_auth(
     let mut s = state.lock().await;
     s.users
         .insert(socket.id.to_string(), (socket.clone(), user.id.clone()));
+
+    if let Some(name) = user.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        s.user_profiles.insert(user.id.clone(), name.to_string());
+    }
+
     info!(
         "auth ok for {}, name {}",
         user.id,
@@ -518,6 +527,8 @@ async fn socket_on_join_room(
                         }),
                     )
                     .ok();
+
+                emit_room_context_to_socket(&socket, &state, &req.room).await;
             }
             return;
         }
@@ -553,6 +564,7 @@ async fn socket_on_join_room(
                         }],
                     )
                     .await;
+                    emit_room_context_to_room(&socket, &state, &req.room).await;
                     emit_rooms_updated_to_lobby(&socket, &state).await;
                 }
                 ActionResult::Err(e) => {
@@ -731,6 +743,8 @@ async fn socket_on_leave_room(
                 }],
             )
             .await;
+
+            emit_room_context_to_room(&socket, &state, &req.room).await;
         }
 
         emit_rooms_updated_to_lobby(&socket, &state).await;
@@ -888,4 +902,56 @@ async fn dispatch_broadcasts(
             }
         }
     }
+}
+
+async fn player_names_for_room(state: &State<StateRef>, room: &str) -> serde_json::Value {
+    let (rm, profiles) = {
+        let guard = state.lock().await;
+        (guard.room_manager.clone(), guard.user_profiles.clone())
+    };
+
+    let room_ref = match rm.get_room(&room.to_string()).await {
+        Some(room_ref) => room_ref,
+        None => return serde_json::json!({}),
+    };
+
+    let users = room_ref.users().await;
+    let mut out = serde_json::Map::new();
+    for uid in users {
+        if let Some(name) = profiles.get(&uid).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            out.insert(uid, serde_json::Value::String(name.to_string()));
+        }
+    }
+
+    serde_json::Value::Object(out)
+}
+
+async fn emit_room_context_to_socket(socket: &SocketRef, state: &State<StateRef>, room: &str) {
+    let player_names = player_names_for_room(state, room).await;
+    socket
+        .emit(
+            "broadcast",
+            &serde_json::json!({
+                "type": "room_context",
+                "room": room,
+                "player_names": player_names,
+            }),
+        )
+        .ok();
+}
+
+async fn emit_room_context_to_room(socket: &SocketRef, state: &State<StateRef>, room: &str) {
+    let player_names = player_names_for_room(state, room).await;
+    let payload = serde_json::json!({
+        "type": "room_context",
+        "room": room,
+        "player_names": player_names,
+    });
+
+    socket.emit("broadcast", &payload).ok();
+    socket
+        .to(room.to_string())
+        .emit("broadcast", &payload)
+        .await
+        .ok();
 }
