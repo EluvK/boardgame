@@ -26,7 +26,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
   List<String> _readyUsers = const [];
   String? _error;
   AcquireStateEnvelope? _latestEnvelope;
-  final List<String> _activityLog = [];
+  final List<_ActivityEntry> _activityLog = [];
 
   final Map<String, int> _buyPlan = {};
   int _mergeShares = 2;
@@ -115,10 +115,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       } else if (ty == 'ready_state') {
         _applyReadyPayload(payload);
       }
-      _activityLog.insert(0, '$ty: ${payload.toString()}');
-      if (_activityLog.length > 30) {
-        _activityLog.removeLast();
-      }
+      _appendActivityFromMessage(payload);
     });
   }
 
@@ -169,12 +166,9 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
 
   void _applyStatePayload(Map<String, dynamic> payload) {
     _latestEnvelope = AcquireStateEnvelope.fromJson(payload);
-    final eventName = _latestEnvelope?.event;
-    if (eventName != null && eventName.isNotEmpty) {
-      _activityLog.insert(0, 'event=$eventName');
-      if (_activityLog.length > 30) {
-        _activityLog.removeLast();
-      }
+    final envelope = _latestEnvelope;
+    if (envelope != null) {
+      _appendActivityFromEnvelope(envelope);
     }
 
     final state = _latestEnvelope?.state;
@@ -201,6 +195,194 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     }
 
     _maybeAutoPassBuy(state);
+  }
+
+  void _appendActivity(_ActivityEntry entry) {
+    _activityLog.insert(0, entry);
+    if (_activityLog.length > 40) {
+      _activityLog.removeLast();
+    }
+  }
+
+  void _appendActivityFromMessage(Map<String, dynamic> payload) {
+    final ty = payload['type']?.toString() ?? '';
+    if (ty == 'buy_ok') {
+      final user = payload['user']?.toString();
+      final purchasesRaw = payload['purchases'];
+      final purchases = purchasesRaw is List ? purchasesRaw : const <dynamic>[];
+      final buyLines = <String>[];
+      final companies = <String>[];
+
+      for (final item in purchases) {
+        if (item is! Map) {
+          continue;
+        }
+        final company = item['company']?.toString() ?? '';
+        final shares = _asInt(item['shares']);
+        if (company.isEmpty || shares <= 0) {
+          continue;
+        }
+        companies.add(company);
+        buyLines.add('$company x$shares');
+      }
+
+      _appendActivity(
+        _ActivityEntry(
+          action: buyLines.isEmpty ? '跳过买股' : '买入股票',
+          userId: user,
+          companies: companies,
+          cost: _asInt(payload['cost']),
+          detail: buyLines.isEmpty ? null : buyLines.join('，'),
+          createdAt: DateTime.now(),
+        ),
+      );
+      return;
+    }
+
+    if (ty == 'draw_tile_ok') {
+      final user = payload['user']?.toString();
+      final tile = payload['tile']?.toString() ?? '';
+      final remaining = _asInt(payload['remaining']);
+      _appendActivity(
+        _ActivityEntry(
+          action: '抽牌',
+          userId: user,
+          companies: const <String>[],
+          detail: tile.isEmpty ? null : '抽到 $tile，牌堆剩余 $remaining',
+          createdAt: DateTime.now(),
+        ),
+      );
+      return;
+    }
+
+    if (ty == 'ready_state') {
+      final readyStateRaw = payload['ready_state'];
+      final readyState = readyStateRaw is Map ? readyStateRaw : const <dynamic, dynamic>{};
+      _appendActivity(
+        _ActivityEntry(
+          action: '准备状态更新',
+          companies: const <String>[],
+          detail: '${_asInt(readyState['ready_count'])}/${_asInt(readyState['player_count'])} ready',
+          createdAt: DateTime.now(),
+        ),
+      );
+    }
+  }
+
+  void _appendActivityFromEnvelope(AcquireStateEnvelope envelope) {
+    final event = envelope.event.trim();
+    if (event.isEmpty || event == 'turn_advanced') {
+      return;
+    }
+
+    final raw = envelope.raw;
+    final companies = <String>[];
+    final primaryCompany = envelope.company?.trim() ?? '';
+    if (primaryCompany.isNotEmpty) {
+      companies.add(primaryCompany);
+    }
+    final survivor = envelope.survivor?.trim() ?? '';
+    if (survivor.isNotEmpty && !companies.contains(survivor)) {
+      companies.add(survivor);
+    }
+
+    String? detail;
+    int? cost;
+
+    final placement = envelope.placement?.trim() ?? '';
+    if (placement.isNotEmpty) {
+      detail = '位置: $placement';
+      if (placement.startsWith('expand:')) {
+        final expandedCompany = placement.substring('expand:'.length).trim();
+        if (expandedCompany.isNotEmpty && !companies.contains(expandedCompany)) {
+          companies.add(expandedCompany);
+        }
+      } else if (placement.startsWith('merge:')) {
+        final mergedCompany = placement.substring('merge:'.length).trim();
+        if (mergedCompany.isNotEmpty && !companies.contains(mergedCompany)) {
+          companies.add(mergedCompany);
+        }
+      } else if (placement.startsWith('merge_pending_stock:')) {
+        final pendingCompany = placement.substring('merge_pending_stock:'.length).trim();
+        if (pendingCompany.isNotEmpty && !companies.contains(pendingCompany)) {
+          companies.add(pendingCompany);
+        }
+      }
+    }
+
+    if (event == 'shares_sold') {
+      final soldShares = _asInt(raw['sold_shares']);
+      final soldCash = _asInt(raw['sold_cash']);
+      if (soldShares > 0) {
+        detail = '卖出 $soldShares 股';
+      }
+      if (soldCash > 0) {
+        cost = -soldCash;
+      }
+    } else if (event == 'shares_converted') {
+      final oldShares = _asInt(raw['traded_old_shares']);
+      final newShares = _asInt(raw['traded_new_shares']);
+      if (oldShares > 0 && newShares > 0) {
+        detail = '换股 $oldShares -> $newShares';
+      }
+    } else if (event == 'final_scored') {
+      final winner = raw['winner']?.toString() ?? '';
+      if (winner.isNotEmpty) {
+        detail = '胜者: ${_playerDisplayName(winner)}';
+      }
+    }
+
+    _appendActivity(
+      _ActivityEntry(
+        action: _eventLabel(event),
+        userId: envelope.by,
+        companies: companies,
+        cost: cost,
+        detail: detail,
+        createdAt: DateTime.now(),
+      ),
+    );
+  }
+
+  String _eventLabel(String event) {
+    switch (event) {
+      case 'place_ok':
+        return '落子';
+      case 'company_expanded':
+        return '扩张公司';
+      case 'choose_company_required':
+        return '等待选择公司';
+      case 'company_founded':
+        return '创办公司';
+      case 'merge_pending':
+        return '触发并购';
+      case 'merge_resolved':
+        return '确定并购幸存公司';
+      case 'merge_stock_decision_required':
+        return '等待并购换股决策';
+      case 'merge_stock_decision_applied':
+        return '完成并购换股决策';
+      case 'shares_sold':
+        return '卖出并购股票';
+      case 'shares_converted':
+        return '并购换股';
+      case 'merge_finalized':
+        return '并购结算完成';
+      case 'bonus_paid':
+        return '并购奖励发放';
+      case 'end_declared':
+        return '宣布结束游戏';
+      case 'final_scored':
+        return '最终结算';
+      case 'game_started':
+        return '游戏开始';
+      default:
+        return event;
+    }
+  }
+
+  Color _playerAccentColor(String userId) {
+    return _AcquirePalette.playerColor(userId);
   }
 
   void _maybeAutoPassBuy(AcquireStateSnapshot state) {
@@ -1608,16 +1790,33 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
 
     Widget companyHoldingChip(String company, int shares) {
       final tint = _companyColor(company);
+      final bg = tint.withValues(alpha: 0.22);
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
-          color: tint.withValues(alpha: 0.22),
+          color: bg,
           borderRadius: BorderRadius.circular(999),
           border: Border.all(color: tint.withValues(alpha: 0.62)),
         ),
         child: Text(
           '$company $shares',
           style: theme.textTheme.labelSmall?.copyWith(color: const Color(0xFF111827), fontWeight: FontWeight.w800),
+        ),
+      );
+    }
+
+    Widget playerChip(String uid) {
+      final color = _playerAccentColor(uid);
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: color.withValues(alpha: 0.5)),
+        ),
+        child: Text(
+          _playerDisplayName(uid),
+          style: theme.textTheme.labelMedium?.copyWith(color: const Color(0xFF111827), fontWeight: FontWeight.w800),
         ),
       );
     }
@@ -1645,6 +1844,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                 ..sort((a, b) => a.key.compareTo(b.key));
               final isMe = uid == widget.session.userId;
               final isTurn = state.currentPlayer == uid;
+              final playerColor = _playerAccentColor(uid);
 
               return Padding(
                 padding: const EdgeInsets.only(bottom: 8),
@@ -1665,12 +1865,20 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                     children: [
                       Row(
                         children: [
-                          Expanded(
-                            child: Text(
-                              displayName,
-                              style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
-                            ),
+                          Container(
+                            width: 4,
+                            height: 22,
+                            decoration: BoxDecoration(color: playerColor, borderRadius: BorderRadius.circular(99)),
                           ),
+                          const SizedBox(width: 8),
+                          playerChip(uid),
+                          const SizedBox(width: 8),
+                          // Expanded(
+                          //   child: Text(
+                          //     displayName,
+                          //     style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                          //   ),
+                          // ),
                           if (isMe)
                             Container(
                               margin: const EdgeInsets.only(right: 6),
@@ -1779,10 +1987,11 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
 
     Widget companyIdChip(String id) {
       final tint = _companyColor(id);
+      final bg = tint.withValues(alpha: 0.22);
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
-          color: tint.withValues(alpha: 0.22),
+          color: bg,
           borderRadius: BorderRadius.circular(999),
           border: Border.all(color: tint.withValues(alpha: 0.62)),
         ),
@@ -1945,6 +2154,34 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
   }
 
   Widget _buildActivityCard(ThemeData theme) {
+    Widget playerChip(String userId) {
+      final color = _playerAccentColor(userId);
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: color.withValues(alpha: 0.5)),
+        ),
+        child: Text(
+          _playerDisplayName(userId),
+          style: theme.textTheme.labelMedium?.copyWith(color: const Color(0xFF111827), fontWeight: FontWeight.w800),
+        ),
+      );
+    }
+
+    Widget companyChip(String company) {
+      final bg = _companyColor(company);
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(color: bg.withValues(alpha: 0.9), borderRadius: BorderRadius.circular(999)),
+        child: Text(
+          company,
+          style: theme.textTheme.labelMedium?.copyWith(color: const Color(0xFF111827), fontWeight: FontWeight.w800),
+        ),
+      );
+    }
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -1960,8 +2197,73 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                 child: ListView.builder(
                   itemCount: _activityLog.length,
                   itemBuilder: (context, index) {
-                    final line = _activityLog[index];
-                    return Padding(padding: const EdgeInsets.only(bottom: 4), child: Text(line));
+                    final item = _activityLog[index];
+                    final time = item.createdAt;
+                    final hh = time.hour.toString().padLeft(2, '0');
+                    final mm = time.minute.toString().padLeft(2, '0');
+                    final ss = time.second.toString().padLeft(2, '0');
+
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF8FAFC),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFFD0D7E5)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(
+                                '$hh:$mm:$ss',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: const Color(0xFF667085),
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const Spacer(),
+                              if (item.cost != null)
+                                Text(
+                                  item.cost! < 0 ? '+\$${-item.cost!}' : '-\$${item.cost}',
+                                  style: theme.textTheme.labelLarge?.copyWith(
+                                    fontWeight: FontWeight.w900,
+                                    color: item.cost! < 0 ? const Color(0xFF027A48) : const Color(0xFFB42318),
+                                  ),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              if (item.userId != null && item.userId!.isNotEmpty) playerChip(item.userId!),
+                              Text(
+                                item.action,
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  fontWeight: FontWeight.w800,
+                                  color: const Color(0xFF0F172A),
+                                ),
+                              ),
+                              ...item.companies.map(companyChip),
+                            ],
+                          ),
+                          if (item.detail != null && item.detail!.trim().isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              item.detail!,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: const Color(0xFF475467),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    );
                   },
                 ),
               ),
@@ -1972,24 +2274,61 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
   }
 }
 
+class _ActivityEntry {
+  const _ActivityEntry({
+    required this.action,
+    required this.companies,
+    required this.createdAt,
+    this.userId,
+    this.cost,
+    this.detail,
+  });
+
+  final String action;
+  final String? userId;
+  final int? cost;
+  final List<String> companies;
+  final String? detail;
+  final DateTime createdAt;
+}
+
 Color _companyColor(String company) {
-  switch (company) {
-    case 'Sackson':
-      return const Color(0xFFE3B341);
-    case 'Worldwide':
-      return const Color(0xFF5B8FF9);
-    case 'American':
-      return const Color(0xFFE67E22);
-    case 'Festival':
-      return const Color(0xFF16A085);
-    case 'Imperial':
-      return const Color(0xFFD35454);
-    case 'Continental':
-      return const Color(0xFF8E5BBE);
-    case 'Tower':
-      return const Color(0xFF4E9F6D);
-    default:
-      return const Color(0xFF9AA4B2);
+  return _AcquirePalette.companyColor(company);
+}
+
+class _AcquirePalette {
+  static const Color fallbackCompany = Color(0xFF9AA4B2);
+
+  static const Map<String, Color> companyColors = <String, Color>{
+    'Sackson': Color(0xFFE3B341),
+    'Worldwide': Color(0xFF5B8FF9),
+    'American': Color(0xFFE67E22),
+    'Festival': Color(0xFF16A085),
+    'Imperial': Color(0xFFD35454),
+    'Continental': Color(0xFF8E5BBE),
+    'Tower': Color(0xFF4E9F6D),
+  };
+
+  static const List<Color> playerColors = <Color>[
+    Color(0xFF0EA5E9),
+    Color(0xFF14B8A6),
+    Color(0xFF22C55E),
+    Color(0xFFF59E0B),
+    Color(0xFFEF4444),
+    Color(0xFF8B5CF6),
+    Color(0xFFEC4899),
+  ];
+
+  static Color companyColor(String company) {
+    return companyColors[company] ?? fallbackCompany;
+  }
+
+  static Color playerColor(String userId) {
+    if (userId.isEmpty) {
+      return playerColors.first;
+    }
+    final hash = userId.codeUnits.fold<int>(0, (sum, c) => (sum * 31 + c) & 0x7fffffff);
+    return playerColors[hash % playerColors.length];
   }
 }
 
