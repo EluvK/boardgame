@@ -93,6 +93,37 @@ impl AcquireState {
             .map(std::string::String::as_str)
     }
 
+    fn current_merge_stock_decider(&self) -> Option<&str> {
+        let settlement = self.merge_settlement.as_ref()?;
+        if self.turn_order.is_empty() {
+            return None;
+        }
+
+        for offset in 0..self.turn_order.len() {
+            let idx = (self.current_turn + offset) % self.turn_order.len();
+            let user = &self.turn_order[idx];
+            let has_pending = settlement
+                .pending
+                .get(user)
+                .map(|set| !set.is_empty())
+                .unwrap_or(false);
+            if has_pending {
+                return Some(user.as_str());
+            }
+        }
+
+        None
+    }
+
+    fn current_actor(&self) -> Option<&str> {
+        if self.phase == "merge_stock_decision" {
+            return self
+                .current_merge_stock_decider()
+                .or_else(|| self.current_player());
+        }
+        self.current_player()
+    }
+
     fn can_start(&self) -> bool {
         self.turn_order.len() >= 2
     }
@@ -593,7 +624,7 @@ impl AcquireState {
     pub fn snapshot_state(&self) -> Value {
         let mut v = serde_json::to_value(self).unwrap_or_else(|_| json!({}));
         if let Some(obj) = v.as_object_mut() {
-            obj.insert("current_player".to_string(), json!(self.current_player()));
+            obj.insert("current_player".to_string(), json!(self.current_actor()));
         }
         v
     }
@@ -721,7 +752,7 @@ impl Game for AcquireGame {
             return ActionResult::Err(game::GameError::Invalid("game_already_over".into()));
         }
 
-        let current_player = match s.current_player() {
+        let expected_actor = match s.current_actor() {
             Some(p) => p.to_string(),
             None => {
                 return ActionResult::Err(game::GameError::State("missing_current_player".into()));
@@ -739,7 +770,7 @@ impl Game for AcquireGame {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        if ty != "merge_stock_decision" && action.user_id != current_player {
+        if action.user_id != expected_actor {
             return ActionResult::Err(game::GameError::Invalid("not_your_turn".into()));
         }
 
@@ -1268,6 +1299,9 @@ impl Game for AcquireGame {
                                 .min(current_holding);
                             let price = s.company_share_price(&company);
                             s.set_share_count(&action.user_id, &company, current_holding - req_qty);
+                            if let Some(pool) = s.stock_pool.get_mut(&company) {
+                                *pool += req_qty;
+                            }
                             sold_shares = req_qty;
                             sold_cash = req_qty * price;
                             *s.players.entry(action.user_id.clone()).or_insert(0) += sold_cash;
@@ -1300,6 +1334,9 @@ impl Game for AcquireGame {
                                 &company,
                                 current_holding - tradable_old,
                             );
+                            if let Some(pool) = s.stock_pool.get_mut(&company) {
+                                *pool += tradable_old;
+                            }
                             *s.share_mut(&action.user_id, &survivor) += new_shares;
                             if let Some(p) = s.stock_pool.get_mut(&survivor) {
                                 *p -= new_shares;

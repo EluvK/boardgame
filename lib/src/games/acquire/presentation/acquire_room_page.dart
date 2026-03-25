@@ -1308,7 +1308,27 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(children: [Text('Buy Shares', style: theme.textTheme.titleMedium)]),
+        Row(
+          children: [
+            Text('Buy Shares', style: theme.textTheme.titleMedium),
+            const Spacer(),
+            ElevatedButton(
+              onPressed: canOperate && !insufficientCash
+                  ? () => _runAction(
+                      () => _client.buy(
+                        room: widget.session.roomId,
+                        userId: widget.session.userId,
+                        purchases: {
+                          for (final entry in _buyPlan.entries)
+                            if (entry.value > 0) entry.key: entry.value,
+                        },
+                      ),
+                    )
+                  : null,
+              child: const Text('Confirm Buy'),
+            ),
+          ],
+        ),
         const SizedBox(height: 6),
         Text(
           '当前现金 \$$myCash  -  消耗现金 \$$estimatedCost  =  剩余现金 \$$estimatedAfterCash',
@@ -1466,35 +1486,6 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
               ],
             ),
           ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            TextButton(
-              onPressed: canOperate && totalPlanned > 0
-                  ? () {
-                      setState(_buyPlan.clear);
-                    }
-                  : null,
-              child: const Text('Clear'),
-            ),
-            const Spacer(),
-            ElevatedButton(
-              onPressed: canOperate && !insufficientCash
-                  ? () => _runAction(
-                      () => _client.buy(
-                        room: widget.session.roomId,
-                        userId: widget.session.userId,
-                        purchases: {
-                          for (final entry in _buyPlan.entries)
-                            if (entry.value > 0) entry.key: entry.value,
-                        },
-                      ),
-                    )
-                  : null,
-              child: const Text('Confirm Buy'),
-            ),
-          ],
-        ),
       ],
     );
   }
@@ -1593,6 +1584,8 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     List<String> companies,
   ) {
     final holdings = state.shares[widget.session.userId] ?? const <String, int>{};
+    final survivorCompany = state.mergeSettlement?.survivor;
+    final survivorPrice = survivorCompany == null ? 0 : _companySharePrice(state, survivorCompany);
     final maxHolding = companies.fold<int>(0, (maxValue, company) {
       final holding = holdings[company] ?? 0;
       return holding > maxValue ? holding : maxValue;
@@ -1609,91 +1602,133 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: companies
-                .map(
-                  (company) => Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      border: Border.all(color: const Color(0xFFD0D7E5)),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(company, style: theme.textTheme.titleSmall),
-                        const SizedBox(height: 6),
-                        Text('holding: ${holdings[company] ?? 0}'),
-                        const SizedBox(height: 6),
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: [
-                            ...() {
-                              final holding = holdings[company] ?? 0;
-                              final maxTradeShares = holding - (holding % 2);
-                              final canSell = canOperate && holding > 0;
-                              final canTrade = canOperate && maxTradeShares >= 2;
-                              final sellShares = canSell ? _mergeShares.clamp(1, holding) : 0;
-                              final tradeShares = canTrade ? _mergeShares.clamp(2, maxTradeShares) : 0;
+            children: companies.map((company) {
+              final tint = _companyColor(company);
+              final holding = holdings[company] ?? 0;
+              final unitPrice = _companySharePrice(state, company);
+              final maxTradeShares = holding - (holding % 2);
+              final canSell = canOperate && holding > 0;
+              final canTrade = canOperate && maxTradeShares >= 2;
+              final sellShares = canSell ? _mergeShares.clamp(1, holding) : 0;
+              final tradeShares = canTrade ? _mergeShares.clamp(2, maxTradeShares) : 0;
+              final sellValue = sellShares * unitPrice;
+              final tradeNewShares = tradeShares ~/ 2;
+              final tradeValue = tradeNewShares * survivorPrice;
 
-                              return [
-                                OutlinedButton(
-                                  onPressed: canOperate
-                                      ? () => _runAction(
-                                          () => _client.mergeStockDecision(
-                                            room: widget.session.roomId,
-                                            userId: widget.session.userId,
-                                            company: company,
-                                            mode: 'hold',
-                                          ),
-                                        )
-                                      : null,
-                                  child: const Text('Hold'),
-                                ),
-                                OutlinedButton(
-                                  onPressed: canSell
-                                      ? () => _runAction(
-                                          () => _client.mergeStockDecision(
-                                            room: widget.session.roomId,
-                                            userId: widget.session.userId,
-                                            company: company,
-                                            mode: 'sell',
-                                            shares: sellShares,
-                                          ),
-                                        )
-                                      : null,
-                                  child: Text('Sell $sellShares'),
-                                ),
-                                OutlinedButton(
-                                  onPressed: canTrade
-                                      ? () => _runAction(
-                                          () => _client.mergeStockDecision(
-                                            room: widget.session.roomId,
-                                            userId: widget.session.userId,
-                                            company: company,
-                                            mode: 'trade',
-                                            shares: tradeShares,
-                                          ),
-                                        )
-                                      : null,
-                                  child: Text('Trade $tradeShares'),
-                                ),
-                              ];
-                            }(),
-                          ],
+              return Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: tint.withValues(alpha: 0.08),
+                  border: Border.all(color: tint.withValues(alpha: 0.45)),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: tint.withValues(alpha: 0.22),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: tint.withValues(alpha: 0.62)),
+                          ),
+                          child: Text(
+                            company,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: const Color(0xFF111827),
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '持有 $holding 股',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: const Color(0xFF334155),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        Text(
+                          '单价 \$$unitPrice',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: const Color(0xFF334155),
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ],
                     ),
-                  ),
-                )
-                .toList(),
+                    const SizedBox(height: 6),
+                    if (survivorCompany != null)
+                      Text(
+                        '换入目标 $survivorCompany（\$$survivorPrice/股）',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: const Color(0xFF475467),
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        OutlinedButton(
+                          onPressed: canOperate
+                              ? () => _runAction(
+                                  () => _client.mergeStockDecision(
+                                    room: widget.session.roomId,
+                                    userId: widget.session.userId,
+                                    company: company,
+                                    mode: 'hold',
+                                  ),
+                                )
+                              : null,
+                          child: const Text('Hold'),
+                        ),
+                        OutlinedButton(
+                          onPressed: canSell
+                              ? () => _runAction(
+                                  () => _client.mergeStockDecision(
+                                    room: widget.session.roomId,
+                                    userId: widget.session.userId,
+                                    company: company,
+                                    mode: 'sell',
+                                    shares: sellShares,
+                                  ),
+                                )
+                              : null,
+                          child: Text('Sell $sellShares (+\$$sellValue)'),
+                        ),
+                        OutlinedButton(
+                          onPressed: canTrade
+                              ? () => _runAction(
+                                  () => _client.mergeStockDecision(
+                                    room: widget.session.roomId,
+                                    userId: widget.session.userId,
+                                    company: company,
+                                    mode: 'trade',
+                                    shares: tradeShares,
+                                  ),
+                                )
+                              : null,
+                          child: Text('Trade $tradeShares -> $tradeNewShares (~\$$tradeValue)'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
           ),
         const SizedBox(height: 8),
         Wrap(
           spacing: 8,
           children: [
-            Text('shares: $_mergeShares'),
+            Text('决策股数: $_mergeShares'),
             OutlinedButton(
               onPressed: _mergeShares > 1
                   ? () {

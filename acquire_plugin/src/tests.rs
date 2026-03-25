@@ -402,6 +402,11 @@ mod tests {
         let ctx = test_ctx();
         let mut state = setup_merge_stock_decision_state(&game, &ctx).await;
 
+        let before_pool = downcast_state(state.as_ref())
+            .stock_pool
+            .get("Sackson")
+            .copied()
+            .unwrap_or(0);
         let before_cash = downcast_state(state.as_ref())
             .players
             .get("u2")
@@ -428,8 +433,10 @@ mod tests {
             .and_then(|m| m.get("Sackson"))
             .copied()
             .unwrap_or(0);
+        let after_pool = s.stock_pool.get("Sackson").copied().unwrap_or(0);
         assert_eq!(after_cash - before_cash, 400);
         assert_eq!(loser_holding, 0);
+        assert_eq!(after_pool - before_pool, 2);
         assert_eq!(s.phase, "buy");
     }
 
@@ -448,6 +455,7 @@ mod tests {
             .copied()
             .unwrap_or(0);
         let before_pool = before.stock_pool.get("Worldwide").copied().unwrap_or(0);
+        let before_loser_pool = before.stock_pool.get("Sackson").copied().unwrap_or(0);
 
         let trade = game
             .handle_action(
@@ -476,10 +484,12 @@ mod tests {
             .copied()
             .unwrap_or(0);
         let after_pool = after.stock_pool.get("Worldwide").copied().unwrap_or(0);
+        let after_loser_pool = after.stock_pool.get("Sackson").copied().unwrap_or(0);
 
         assert_eq!(after_cash, before_cash);
         assert_eq!(after_survivor_holding - before_survivor_holding, 1);
         assert_eq!(before_pool - after_pool, 1);
+        assert_eq!(after_loser_pool - before_loser_pool, 2);
         assert_eq!(loser_holding, 0);
         assert_eq!(after.phase, "buy");
     }
@@ -1037,6 +1047,90 @@ mod tests {
         assert_eq!(s.phase, "buy");
         assert!(s.companies.contains_key("Worldwide"));
         assert!(!s.companies.contains_key("Sackson"));
+    }
+
+    #[tokio::test]
+    async fn merge_stock_decision_is_sequential_from_trigger_player() {
+        let game = AcquireGame::new();
+        let ctx = test_ctx();
+        let mut state = setup_merge_stock_decision_state(&game, &ctx).await;
+
+        {
+            let s = downcast_state_mut(state.as_mut());
+            s.set_share_count("u1", "Sackson", 1);
+            if let Some(settlement) = s.merge_settlement.as_mut() {
+                settlement
+                    .pending
+                    .entry("u1".to_string())
+                    .or_insert_with(HashSet::new)
+                    .insert("Sackson".to_string());
+            }
+        }
+
+        let before = downcast_state(state.as_ref());
+        assert_eq!(before.current_player(), Some("u1"));
+
+        // u2 cannot decide before u1 when both have pending loser shares.
+        let u2_early = game
+            .handle_action(
+                &ctx,
+                state.as_mut(),
+                make_action(
+                    "u2",
+                    json!({"type":"merge_stock_decision","company":"Sackson","mode":"hold"}),
+                ),
+            )
+            .await;
+        match u2_early {
+            ActionResult::Err(game::GameError::Invalid(e)) => assert_eq!(e, "not_your_turn"),
+            _ => panic!("expected not_your_turn"),
+        }
+
+        let u1_decide = game
+            .handle_action(
+                &ctx,
+                state.as_mut(),
+                make_action(
+                    "u1",
+                    json!({"type":"merge_stock_decision","company":"Sackson","mode":"hold"}),
+                ),
+            )
+            .await;
+        assert!(matches!(u1_decide, ActionResult::Ok { .. }));
+
+        let mid = downcast_state(state.as_ref());
+        assert_eq!(mid.phase, "merge_stock_decision");
+
+        // u1 has finished all pending loser decisions, cannot act again before u2.
+        let u1_again = game
+            .handle_action(
+                &ctx,
+                state.as_mut(),
+                make_action(
+                    "u1",
+                    json!({"type":"merge_stock_decision","company":"Sackson","mode":"hold"}),
+                ),
+            )
+            .await;
+        match u1_again {
+            ActionResult::Err(game::GameError::Invalid(e)) => assert_eq!(e, "not_your_turn"),
+            _ => panic!("expected not_your_turn"),
+        }
+
+        let u2_decide = game
+            .handle_action(
+                &ctx,
+                state.as_mut(),
+                make_action(
+                    "u2",
+                    json!({"type":"merge_stock_decision","company":"Sackson","mode":"hold"}),
+                ),
+            )
+            .await;
+        assert!(matches!(u2_decide, ActionResult::Ok { .. }));
+
+        let after = downcast_state(state.as_ref());
+        assert_eq!(after.phase, "buy");
     }
 
     #[tokio::test]
