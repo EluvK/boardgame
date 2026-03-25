@@ -1,0 +1,74 @@
+name: Deploy Flutter Web to GitHub Pages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build web
+        shell: bash
+        env:
+          PAGES_BASE_HREF: ${{ vars.GH_PAGES_BASE_HREF }}
+          PAGES_CNAME: ${{ vars.GH_PAGES_CNAME }}
+          LOBBY_SERVER_URL: ${{ vars.LOBBY_SERVER_URL }}
+        run: |
+          set -euo pipefail
+
+          version_str=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+          app_version=${version_str%%+*}
+          app_build=${version_str##*+}
+
+          base_href="$PAGES_BASE_HREF"
+          if [[ -z "$base_href" ]]; then
+            base_href="/${{ github.event.repository.name }}/"
+          fi
+
+          flutter build web --release \
+            --base-href "$base_href" \
+            --dart-define="APP_VERSION=$app_version" \
+            --dart-define="APP_BUILD_NUMBER=$app_build" \
+            --dart-define="LOBBY_SERVER_URL=$LOBBY_SERVER_URL"
+
+          if [[ -n "$PAGES_CNAME" ]]; then
+            echo "$PAGES_CNAME" > build/web/CNAME
+          fi
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
