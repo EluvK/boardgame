@@ -18,21 +18,107 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description" content="A Board Game Lobby Application">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="boardgame_acquire">
+  <meta name="apple-mobile-web-app-title" content="Board Game Lobby">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>boardgame_acquire</title>
+  <title>Board Game Lobby</title>
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
+  <div id="loading">
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background-color: #ffffff;
+      }
+
+      #loading {
+        position: fixed;
+        inset: 0;
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background-color: #ffffff;
+      }
+
+      #loading .logo {
+        animation: 1s ease-in-out 0s infinite alternate breathe;
+        opacity: 0.7;
+        transition: opacity 0.4s;
+        width: 128px;
+        height: 128px;
+        border-radius: 24%;
+      }
+
+      #loading.main_done .logo {
+        opacity: 1;
+      }
+
+      #loading.init_done {
+        animation: 0.66s ease-in-out 0s 1 forwards zoom_out;
+      }
+
+      @keyframes breathe {
+        from {
+          transform: scale(0.78);
+        }
+
+        to {
+          transform: scale(0.68);
+        }
+      }
+
+      @keyframes zoom_out {
+        from {
+          transform: scale(1);
+          opacity: 0.7;
+        }
+
+        to {
+          transform: scale(5);
+          opacity: 0;
+        }
+      }
+    </style>
+    <img class="logo" src="icons/Icon-192.png" alt="Loading..." />
+  </div>
+
+  <script>
+    (function () {
+      var loading = document.getElementById('loading');
+      if (!loading) return;
+
+      function finishLoading() {
+        loading.classList.add('main_done');
+        setTimeout(function () {
+          loading.classList.add('init_done');
+          setTimeout(function () {
+            if (loading && loading.parentNode) {
+              loading.parentNode.removeChild(loading);
+            }
+            document.body.style.overflow = 'auto';
+          }, 700);
+        }, 250);
+      }
+
+      window.addEventListener('flutter-first-frame', finishLoading, { once: true });
+      window.addEventListener('load', function () {
+        setTimeout(finishLoading, 1200);
+      }, { once: true });
+    })();
+  </script>
+
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

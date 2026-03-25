@@ -61,14 +61,14 @@ class _HomePageState extends State<HomePage> {
   }
 
   String _resolveInitialServerUrl(String? savedServerUrl) {
-    final saved = savedServerUrl?.trim() ?? '';
-    if (saved.isNotEmpty) {
-      return saved;
-    }
-
     final fromDefine = _serverUrlFromDefine.trim();
     if (fromDefine.isNotEmpty) {
       return fromDefine;
+    }
+
+    final saved = savedServerUrl?.trim() ?? '';
+    if (saved.isNotEmpty) {
+      return saved;
     }
 
     return kReleaseMode ? _releaseDefaultServerUrl : _debugDefaultServerUrl;

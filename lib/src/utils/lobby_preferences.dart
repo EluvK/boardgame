@@ -2,11 +2,7 @@ import 'device_identity.dart';
 import 'storage_box.dart';
 
 class LobbyProfile {
-  LobbyProfile({
-    required this.deviceId,
-    required this.userName,
-    required this.serverUrl,
-  });
+  LobbyProfile({required this.deviceId, required this.userName, required this.serverUrl});
 
   final String deviceId;
   final String userName;
@@ -16,7 +12,6 @@ class LobbyProfile {
 class LobbyPreferences {
   static const String _userNameKey = 'lobby_user_name';
   static const String _serverUrlKey = 'lobby_server_url';
-  static const String _defaultServerUrl = 'http://127.0.0.1:17980';
 
   static Future<LobbyProfile> loadProfile() async {
     final box = StorageBox.box;
@@ -29,16 +24,9 @@ class LobbyPreferences {
     }
 
     var serverUrl = box.read<String>(_serverUrlKey);
-    if (serverUrl == null || serverUrl.trim().isEmpty) {
-      serverUrl = _defaultServerUrl;
-      await box.write(_serverUrlKey, serverUrl);
-    }
+    serverUrl ??= '';
 
-    return LobbyProfile(
-      deviceId: deviceId,
-      userName: userName,
-      serverUrl: serverUrl,
-    );
+    return LobbyProfile(deviceId: deviceId, userName: userName, serverUrl: serverUrl);
   }
 
   static Future<void> saveUserName(String value) async {
