@@ -2,7 +2,7 @@
 
 本目录用于保存项目协作文档。为减少重复和过期信息，按“长期维护”与“历史归档”区分。
 
-最后整理时间：2026-03-23
+最后整理时间：2026-03-25
 
 ## 文档状态总览
 
@@ -13,6 +13,7 @@
 | guides/acquire-client-server-protocol.zh-CN.md | 持续维护 | 前后端协议单一参考 | 协议字段/事件变更时同步更新版本 |
 | guides/acquire-client-architecture.zh-CN.md | 持续维护 | Flutter 客户端分层与目录约束 | 架构调整时同步更新 |
 | guides/acquire-handoff-2026-03-20.zh-CN.md | 历史归档 | 会话交接快照 | 只读，不作为当前待办来源 |
+| guides/acquire-status-2026-03-23.zh-CN.md | 历史归档 | 2026-03-23 阶段状态与回归清单快照 | 只读，不作为当前待办来源 |
 | prompts/plan-boardgame.prompt.md | 持续维护 | 跨游戏长期目标说明 | 目标阶段变化时更新 |
 
 ## 日常阅读顺序（推荐）
