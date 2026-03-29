@@ -734,18 +734,19 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       fg = const Color(0xFF0B7A75);
       icon = Icons.play_circle_outline;
     } else {
+      final currentPlayerName = _playerDisplayName(state.currentPlayer);
       if (state.phase == 'merge_stock_decision') {
-        final decider = state.currentPlayer == null ? '' : _playerDisplayName(state.currentPlayer!);
+        final decider = currentPlayerName.trim();
         message = decider.isEmpty
             ? 'Waiting for merge stock decisions.'
             : 'Waiting for $decider to decide merge stocks.';
       } else {
         message = switch (state.phase) {
-          'place' => 'Waiting for ${state.currentPlayer} to place a tile.',
-          'buy' => 'Waiting for ${state.currentPlayer} to complete buy step.',
-          'choose_company' => 'Waiting for ${state.currentPlayer} to choose a company.',
-          'resolve_merge' => 'Waiting for ${state.currentPlayer} to resolve merge.',
-          _ => 'Waiting for ${state.currentPlayer} to act.',
+          'place' => 'Waiting for $currentPlayerName to place a tile.',
+          'buy' => 'Waiting for $currentPlayerName to complete buy step.',
+          'choose_company' => 'Waiting for $currentPlayerName to choose a company.',
+          'resolve_merge' => 'Waiting for $currentPlayerName to resolve merge.',
+          _ => 'Waiting for $currentPlayerName to act.',
         };
       }
       bg = const Color(0xFFF8FAFC);
@@ -796,8 +797,6 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
               const SizedBox(height: 12),
               _buildActionCard(theme, state, isMyTurn, canActNow, myPendingMergeCompanies),
               const SizedBox(height: 12),
-              _buildHandCard(theme, state, isMyTurn),
-              const SizedBox(height: 12),
               _buildCompaniesCard(theme, state),
               const SizedBox(height: 12),
               _buildPlayersCard(theme, state),
@@ -817,8 +816,6 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                   _buildBoardCard(theme, state, isMyTurn),
                   const SizedBox(height: 12),
                   _buildActionCard(theme, state, isMyTurn, canActNow, myPendingMergeCompanies),
-                  const SizedBox(height: 12),
-                  _buildHandCard(theme, state, isMyTurn),
                 ],
               ),
             ),
@@ -1002,7 +999,6 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
 
         final isPlaced = state.tiles.contains(pos);
         final companyId = companyByTile[pos];
-        final company = companyId == null ? null : state.companies[companyId];
         final inHand = hand.contains(pos);
         final activeCompanyId = _activeInfoCompanyId;
         final activeTile = _activeInfoTile;
@@ -1177,13 +1173,17 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     bool canActNow,
     List<String> myPendingMergeCompanies,
   ) {
+    final meDisplay = _playerDisplayName(widget.session.userId);
+    final readyUsersDisplay = _readyUsers.map(_playerDisplayName).toList();
+    final currentPlayerDisplay = state == null ? '' : _playerDisplayName(state.currentPlayer);
+
     final roomInfo = <String>[
       'roomId: ${widget.session.roomId}',
       'gameId: ${widget.session.gameId}',
-      'me: ${widget.session.userId}',
+      'me: $meDisplay',
       'room_started: $_roomStarted',
       'ready: $_readyCount/$_playerCount  (min=$_minPlayers)',
-      if (_readyUsers.isNotEmpty) 'ready_users: ${_readyUsers.join(', ')}',
+      if (readyUsersDisplay.isNotEmpty) 'ready_users: ${readyUsersDisplay.join(', ')}',
     ];
 
     final gameInfo = state == null
@@ -1191,7 +1191,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         : <String>[
             'phase: ${state.phase}',
             'turn: ${state.turnNo}',
-            'current_player: ${state.currentPlayer}',
+            'current_player: $currentPlayerDisplay',
             'my_turn: $isMyTurn',
             'can_act_now: $canActNow',
             if (myPendingMergeCompanies.isNotEmpty) 'pending_merge_decisions: ${myPendingMergeCompanies.join(', ')}',
@@ -1869,50 +1869,6 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     );
   }
 
-  Widget _buildHandCard(ThemeData theme, AcquireStateSnapshot? state, bool isMyTurn) {
-    if (state == null) {
-      return const SizedBox.shrink();
-    }
-
-    final hand = (state.playerTiles[widget.session.userId] ?? const <String>{}).toList()..sort();
-    final canPlace = isMyTurn && state.phase == 'place' && !_busy && !_leaving;
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('My Hand (${hand.length})', style: theme.textTheme.titleLarge),
-            const SizedBox(height: 8),
-            if (hand.isEmpty) const Text('No tiles in hand.'),
-            if (hand.isNotEmpty)
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: hand
-                    .map(
-                      (tile) => ElevatedButton(
-                        onPressed: canPlace
-                            ? () => _runAction(
-                                () => _client.place(
-                                  room: widget.session.roomId,
-                                  userId: widget.session.userId,
-                                  pos: tile,
-                                ),
-                              )
-                            : null,
-                        child: Text(tile),
-                      ),
-                    )
-                    .toList(),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _buildPlayersCard(ThemeData theme, AcquireStateSnapshot? state) {
     if (state == null) {
       return const SizedBox.shrink();
@@ -1986,7 +1942,6 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
             const SizedBox(height: 8),
             ...players.map((entry) {
               final uid = entry.key;
-              final displayName = _playerDisplayName(uid);
               final cash = entry.value;
               final holding = state.shares[uid] ?? const <String, int>{};
               final nonZero = holding.entries.where((e) => e.value != 0).toList()

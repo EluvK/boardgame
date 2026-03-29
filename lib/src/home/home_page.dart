@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'dart:async';
+import 'dart:math';
 
 import '../api/lobby_api.dart';
 import '../models/lobby_models.dart';
@@ -22,19 +24,24 @@ class _HomePageState extends State<HomePage> {
 
   final _serverCtrl = TextEditingController(text: 'http://127.0.0.1:17980');
   final _userNameCtrl = TextEditingController(text: 'web-user');
-  final _roomIdCtrl = TextEditingController(text: 'room_001');
-  final _joinRoomCtrl = TextEditingController(text: 'demo');
+  final _roomIdCtrl = TextEditingController();
+  final _joinRoomCtrl = TextEditingController(text: '');
 
   LobbyApi? _api;
   Timer? _lobbyRefreshTimer;
+  Timer? _messageFadeTimer;
+  Timer? _messageHideTimer;
+  final Random _random = Random();
 
   bool _connected = false;
   bool _authed = false;
   bool _busy = false;
-  bool _autoJoinOnCreate = true;
+  bool _hasAttemptedAutoConnect = false;
 
   String _message = 'Ready';
   String _messageTone = 'info';
+  bool _showTopMessage = false;
+  double _topMessageOpacity = 1;
   String? _deviceId;
   DateTime? _lastLobbySyncAt;
 
@@ -45,6 +52,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    _roomIdCtrl.text = _generateRoomCode();
     _initProfile();
   }
 
@@ -57,6 +65,25 @@ class _HomePageState extends State<HomePage> {
       _deviceId = profile.deviceId;
       _userNameCtrl.text = profile.userName;
       _serverCtrl.text = _resolveInitialServerUrl(profile.serverUrl);
+    });
+
+    _scheduleAutoConnect();
+  }
+
+  void _scheduleAutoConnect() {
+    if (_hasAttemptedAutoConnect) {
+      return;
+    }
+    _hasAttemptedAutoConnect = true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _connected || _busy) {
+        return;
+      }
+
+      _showMessage('Preparing lobby and auto-connecting...', tone: 'info');
+
+      _connect(autoTriggered: true);
     });
   }
 
@@ -77,6 +104,8 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     _lobbyRefreshTimer?.cancel();
+    _messageFadeTimer?.cancel();
+    _messageHideTimer?.cancel();
     _api?.disconnect();
     _serverCtrl.dispose();
     _userNameCtrl.dispose();
@@ -85,25 +114,24 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
-  Future<void> _runTask(Future<void> Function() task) async {
+  Future<bool> _runTask(Future<void> Function() task) async {
     if (_busy) {
-      return;
+      return false;
     }
 
     setState(() {
       _busy = true;
     });
 
+    var success = false;
     try {
       await task();
+      success = true;
     } catch (e) {
       if (!mounted) {
-        return;
+        return false;
       }
-      setState(() {
-        _message = 'Error: $e';
-        _messageTone = 'error';
-      });
+      _showMessage('Error: $e', tone: 'error');
     } finally {
       if (mounted) {
         setState(() {
@@ -111,10 +139,12 @@ class _HomePageState extends State<HomePage> {
         });
       }
     }
+
+    return success;
   }
 
-  Future<void> _connect() async {
-    await _runTask(() async {
+  Future<void> _connect({bool autoTriggered = false}) async {
+    final success = await _runTask(() async {
       final deviceId = _deviceId;
       if (deviceId == null || deviceId.isEmpty) {
         throw Exception('Device ID not ready');
@@ -136,12 +166,17 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         _connected = true;
         _authed = true;
-        _message = 'Connected and authenticated';
-        _messageTone = 'success';
       });
+      _showMessage('Connected and authenticated', tone: 'success');
 
       await _refreshGamesAndRooms();
     });
+
+    if (!mounted || success || !autoTriggered) {
+      return;
+    }
+
+    _showMessage('Auto-connect failed. You can adjust name and tap Connect.', tone: 'info');
   }
 
   void _disconnect() {
@@ -154,10 +189,9 @@ class _HomePageState extends State<HomePage> {
       _games = const [];
       _rooms = const [];
       _selectedGameId = null;
-      _message = 'Disconnected';
-      _messageTone = 'info';
       _lastLobbySyncAt = null;
     });
+    _showMessage('Disconnected', tone: 'info');
   }
 
   Future<void> _reauthWithNewName() async {
@@ -178,10 +212,81 @@ class _HomePageState extends State<HomePage> {
 
       setState(() {
         _authed = true;
-        _message = 'Name updated';
-        _messageTone = 'success';
       });
+      _showMessage('Name updated', tone: 'success');
     });
+  }
+
+  Future<void> _saveOrApplyUserName() async {
+    final deviceId = _deviceId;
+    if (deviceId == null || deviceId.isEmpty) {
+      return;
+    }
+
+    final normalizedName = _effectiveUserName(deviceId);
+    await LobbyPreferences.saveUserName(normalizedName);
+
+    if (_connected && !_busy) {
+      await _reauthWithNewName();
+      return;
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    _showMessage('Name saved', tone: 'info');
+  }
+
+  Future<void> _randomizeUserName() async {
+    final prefixes = [
+      'Fox',
+      'Oak',
+      'Nova',
+      'Atlas',
+      'River',
+      'Pixel',
+      'Comet',
+      'Maple',
+      'Amber',
+      'Blaze',
+      'Cedar',
+      'Drift',
+      'Echo',
+      'Flint',
+      'Glint',
+      'Harbor',
+      'Iris',
+      'Jade',
+      'Kite',
+      'Lumen',
+      'Moss',
+      'Nimbus',
+      'Onyx',
+      'Pine',
+      'Quartz',
+      'Rune',
+      'Sol',
+      'Tide',
+      'Umber',
+      'Vale',
+      'Wave',
+      'Yonder',
+      'Zephyr',
+    ];
+    final suffix = _random.nextInt(9000) + 1000;
+    final generated = '${prefixes[_random.nextInt(prefixes.length)]}-$suffix';
+
+    setState(() {
+      _userNameCtrl.text = generated;
+    });
+    _showMessage('Generated a new name: $generated', tone: 'info');
+
+    await LobbyPreferences.saveUserName(generated);
+
+    if (_connected && !_busy) {
+      await _reauthWithNewName();
+    }
   }
 
   Future<void> _refreshGamesAndRooms() async {
@@ -201,10 +306,9 @@ class _HomePageState extends State<HomePage> {
       _games = games;
       _rooms = rooms;
       _selectedGameId = _resolveSelectedGame(games, _selectedGameId);
-      _message = 'Fetched ${games.length} games, ${rooms.length} rooms';
-      _messageTone = 'info';
       _lastLobbySyncAt = DateTime.now();
     });
+    _showMessage('Fetched ${games.length} games, ${rooms.length} rooms', tone: 'info');
   }
 
   void _bindLobbyPush(LobbyApi api) {
@@ -215,10 +319,9 @@ class _HomePageState extends State<HomePage> {
 
       setState(() {
         _rooms = rooms;
-        _message = 'Lobby updated: ${rooms.length} rooms';
-        _messageTone = 'info';
         _lastLobbySyncAt = DateTime.now();
       });
+      _showMessage('Lobby updated: ${rooms.length} rooms', tone: 'info');
     });
   }
 
@@ -263,6 +366,11 @@ class _HomePageState extends State<HomePage> {
     return games.first.id;
   }
 
+  String _generateRoomCode() {
+    final code = _random.nextInt(9000) + 1000;
+    return code.toString();
+  }
+
   Future<void> _createRoom() async {
     await _runTask(() async {
       final api = _api;
@@ -273,25 +381,21 @@ class _HomePageState extends State<HomePage> {
       if (gameId == null || gameId.isEmpty) {
         throw Exception('No game selected');
       }
-      final roomId = _roomIdCtrl.text.trim();
-      if (roomId.isEmpty) {
-        throw Exception('Room id is required');
-      }
+      final requested = _roomIdCtrl.text.trim();
+      final roomId = requested.isEmpty ? _generateRoomCode() : requested;
 
-      await api.createRoom(room: roomId, gameId: gameId, autoJoin: _autoJoinOnCreate);
+      await api.createRoom(room: roomId, gameId: gameId, autoJoin: true);
       _joinRoomCtrl.text = roomId;
+      _roomIdCtrl.text = _generateRoomCode();
 
       await _refreshGamesAndRooms();
-      if (_autoJoinOnCreate && mounted) {
+      if (mounted) {
         _openRoomDetail(roomId: roomId, gameId: gameId);
       }
       if (!mounted) {
         return;
       }
-      setState(() {
-        _message = 'Room "$roomId" created';
-        _messageTone = 'success';
-      });
+      _showMessage('Room "$roomId" created', tone: 'success');
     });
   }
 
@@ -313,10 +417,7 @@ class _HomePageState extends State<HomePage> {
           .cast<String?>()
           .firstWhere((id) => id != null && id.isNotEmpty, orElse: () => _selectedGameId);
       _openRoomDetail(roomId: roomId, gameId: resolvedGameId);
-      setState(() {
-        _message = 'Joined room "$roomId"';
-        _messageTone = 'success';
-      });
+      _showMessage('Joined room "$roomId"', tone: 'success');
     });
   }
 
@@ -332,10 +433,7 @@ class _HomePageState extends State<HomePage> {
       if (!mounted) {
         return;
       }
-      setState(() {
-        _message = 'Left room "$roomId"';
-        _messageTone = 'info';
-      });
+      _showMessage('Left room "$roomId"', tone: 'info');
     });
   }
 
@@ -343,15 +441,11 @@ class _HomePageState extends State<HomePage> {
     final api = _api;
     final userId = _deviceId;
     if (api == null || !_connected || !_authed) {
-      setState(() {
-        _message = 'Connect and auth first';
-      });
+      _showMessage('Connect and auth first', tone: 'info');
       return;
     }
     if (userId == null || userId.isEmpty) {
-      setState(() {
-        _message = 'Device ID not ready';
-      });
+      _showMessage('Device ID not ready', tone: 'error');
       return;
     }
 
@@ -382,6 +476,44 @@ class _HomePageState extends State<HomePage> {
     return fallback;
   }
 
+  void _showMessage(String text, {String tone = 'info', bool autoHide = true}) {
+    if (!mounted) {
+      return;
+    }
+
+    _messageFadeTimer?.cancel();
+    _messageHideTimer?.cancel();
+
+    setState(() {
+      _message = text;
+      _messageTone = tone;
+      _showTopMessage = true;
+      _topMessageOpacity = 1;
+    });
+
+    if (!autoHide) {
+      return;
+    }
+
+    _messageFadeTimer = Timer(const Duration(seconds: 3), () {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _topMessageOpacity = 0;
+      });
+
+      _messageHideTimer = Timer(const Duration(milliseconds: 260), () {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _showTopMessage = false;
+        });
+      });
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -408,6 +540,8 @@ class _HomePageState extends State<HomePage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  _buildTopMessage(theme),
+                  if (_showTopMessage) const SizedBox(height: 10),
                   _buildHero(theme, lastSyncText),
                   const SizedBox(height: 12),
                   _buildConnectionCard(theme),
@@ -415,8 +549,6 @@ class _HomePageState extends State<HomePage> {
                   _buildLobbyCard(theme),
                   const SizedBox(height: 12),
                   _buildRoomCard(theme),
-                  const SizedBox(height: 12),
-                  _buildStatus(theme),
                 ],
               ),
             ),
@@ -427,52 +559,32 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildHero(ThemeData theme, String lastSyncText) {
-    Widget statusPill(String label, bool active, {Color? activeColor}) {
-      final color = activeColor ?? const Color(0xFF1769AA);
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: active ? color.withValues(alpha: 0.16) : const Color(0xFFF3F4F6),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: active ? color.withValues(alpha: 0.45) : const Color(0xFFD1D5DB)),
-        ),
-        child: Text(
-          label,
-          style: theme.textTheme.labelMedium?.copyWith(
-            fontWeight: FontWeight.w700,
-            color: active ? color : const Color(0xFF475467),
-          ),
-        ),
-      );
-    }
-
+    final connected = _connected && _authed;
+    final statusColor = connected ? const Color(0xFF027A48) : const Color(0xFF475467);
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFFE7F5FF), Color(0xFFEFFAF5)],
-        ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFBFD8F3)),
+        color: Colors.white.withValues(alpha: 0.9),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFD0D7E5)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Text('Lobby Control Center', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              statusPill('1. Connected', _connected, activeColor: const Color(0xFF1D4ED8)),
-              statusPill('2. Authenticated', _authed, activeColor: const Color(0xFF0F766E)),
-              statusPill('3. Ready to Play', _connected && _authed, activeColor: const Color(0xFF027A48)),
-            ],
+          Icon(connected ? Icons.cloud_done_outlined : Icons.cloud_off_outlined, size: 18, color: statusColor),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  connected ? 'Connected' : 'Not connected',
+                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700, color: statusColor),
+                ),
+                Text(lastSyncText, style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF667085))),
+              ],
+            ),
           ),
-          const SizedBox(height: 8),
-          Text(lastSyncText, style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF475467))),
+          if (_busy) const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
         ],
       ),
     );
@@ -488,19 +600,78 @@ class _HomePageState extends State<HomePage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Server Connection', style: theme.textTheme.titleLarge),
-            // const SizedBox(height: 4),
-            // Text('Socket path is fixed to /socket.io', style: theme.textTheme.bodySmall),
-            // const SizedBox(height: 2),
-            // Text('Override: --dart-define=LOBBY_SERVER_URL=...', style: theme.textTheme.bodySmall),
             const SizedBox(height: 8),
-            TextField(
-              controller: _serverCtrl,
-              decoration: const InputDecoration(labelText: 'Server URL', hintText: 'http://127.0.0.1:17980'),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF4F9FF),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFBFDBFE)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.person_outline, color: Color(0xFF1D4ED8)),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Display Name (auto-generated, editable)',
+                        style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _userNameCtrl,
+                    maxLength: 20,
+                    maxLengthEnforcement: MaxLengthEnforcement.enforced,
+                    textInputAction: TextInputAction.done,
+                    onEditingComplete: () {
+                      FocusScope.of(context).unfocus();
+                      _saveOrApplyUserName();
+                    },
+                    inputFormatters: [LengthLimitingTextInputFormatter(20)],
+                    decoration: InputDecoration(
+                      labelText: 'Your name shown to other players',
+                      suffixIcon: IconButton(
+                        tooltip: 'Generate random name',
+                        onPressed: _busy ? null : _randomizeUserName,
+                        icon: const Icon(Icons.casino_outlined),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Tip: keep it short so room member lists stay readable.',
+                    style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF475467)),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 12),
-            TextField(
-              controller: _userNameCtrl,
-              decoration: const InputDecoration(labelText: 'Display Name'),
+            Theme(
+              data: theme.copyWith(dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: EdgeInsets.zero,
+                title: Text(
+                  'Advanced: server address',
+                  style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFF667085)),
+                ),
+                subtitle: Text(
+                  'Usually no change needed',
+                  style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF98A2B3)),
+                ),
+                children: [
+                  const SizedBox(height: 4),
+                  TextField(
+                    controller: _serverCtrl,
+                    decoration: const InputDecoration(labelText: 'Server URL', hintText: 'http://127.0.0.1:17980'),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 12),
             Wrap(
@@ -508,19 +679,24 @@ class _HomePageState extends State<HomePage> {
               runSpacing: 8,
               children: [
                 ElevatedButton.icon(
-                  onPressed: _busy ? null : _connect,
-                  icon: const Icon(Icons.power_settings_new),
-                  label: Text(_connected ? 'Reconnect' : 'Connect'),
+                  onPressed: _busy
+                      ? null
+                      : () {
+                          if (_connected) {
+                            _disconnect();
+                          } else {
+                            _connect();
+                          }
+                        },
+                  icon: Icon(_connected ? Icons.link_off : Icons.power_settings_new),
+                  label: Text(_connected ? 'Disconnect' : 'Connect'),
                 ),
-                OutlinedButton(onPressed: _busy ? null : _disconnect, child: const Text('Disconnect')),
-                OutlinedButton(
-                  onPressed: _busy || !_connected ? null : _reauthWithNewName,
-                  child: const Text('Update Name'),
-                ),
-                OutlinedButton(
-                  onPressed: _busy ? null : () => _runTask(_refreshGamesAndRooms),
-                  child: const Text('Refresh'),
-                ),
+                if (_connected)
+                  OutlinedButton.icon(
+                    onPressed: _busy ? null : () => _runTask(_refreshGamesAndRooms),
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Refresh Lobby'),
+                  ),
                 Text(
                   _connected ? (_authed ? 'Online + Authed' : 'Online') : 'Offline',
                   style: theme.textTheme.bodyMedium?.copyWith(
@@ -624,7 +800,7 @@ class _HomePageState extends State<HomePage> {
                               ? null
                               : () {
                                   _joinRoomCtrl.text = r.id;
-                                  _runTask(_joinRoom);
+                                  _joinRoom();
                                 },
                           child: const Text('Join'),
                         ),
@@ -640,6 +816,41 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildRoomCard(ThemeData theme) {
+    Widget sectionCard({
+      required IconData icon,
+      required String title,
+      required String subtitle,
+      required List<Widget> children,
+      Color tint = const Color(0xFFEAF2FF),
+      Color border = const Color(0xFFD5E3F7),
+    }) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: tint,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: border),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(icon, size: 18, color: const Color(0xFF1D4ED8)),
+                const SizedBox(width: 8),
+                Text(title, style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800)),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(subtitle, style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF667085))),
+            const SizedBox(height: 10),
+            ...children,
+          ],
+        ),
+      );
+    }
+
     return Card(
       elevation: 1,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -650,71 +861,101 @@ class _HomePageState extends State<HomePage> {
           children: [
             Text('Room Actions', style: theme.textTheme.titleLarge),
             const SizedBox(height: 8),
-            TextField(
-              controller: _roomIdCtrl,
-              decoration: const InputDecoration(labelText: 'Create Room ID'),
-            ),
-            const SizedBox(height: 8),
-            Row(
+            sectionCard(
+              icon: Icons.add_home_work_outlined,
+              title: 'Create Room',
+              subtitle: 'Creates a room and joins it immediately.',
               children: [
-                Checkbox(
-                  value: _autoJoinOnCreate,
-                  onChanged: _busy
-                      ? null
-                      : (v) {
-                          setState(() {
-                            _autoJoinOnCreate = v ?? true;
-                          });
-                        },
+                TextField(
+                  controller: _roomIdCtrl,
+                  keyboardType: TextInputType.number,
+                  maxLength: 4,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)],
+                  decoration: InputDecoration(
+                    labelText: 'Room ID (optional, 4 digits)',
+                    hintText: 'Leave empty to auto-generate',
+                    suffixIcon: IconButton(
+                      tooltip: 'Generate room ID',
+                      onPressed: _busy
+                          ? null
+                          : () {
+                              _roomIdCtrl.text = _generateRoomCode();
+                            },
+                      icon: const Icon(Icons.casino_outlined),
+                    ),
+                  ),
                 ),
-                const Text('Auto join after create'),
+                const SizedBox(height: 4),
+                ElevatedButton.icon(
+                  onPressed: _busy ? null : _createRoom,
+                  icon: const Icon(Icons.add_box_outlined),
+                  label: const Text('Create and Join'),
+                ),
               ],
             ),
-            const SizedBox(height: 8),
-            ElevatedButton.icon(
-              onPressed: _busy ? null : _createRoom,
-              icon: const Icon(Icons.add_box_outlined),
-              label: const Text('Create Room'),
+            const SizedBox(height: 10),
+            sectionCard(
+              icon: Icons.login_outlined,
+              title: 'Join Existing Room',
+              subtitle: 'Joins a room by ID and opens its detail page.',
+              tint: const Color(0xFFF8FAFC),
+              border: const Color(0xFFD0D7E5),
+              children: [
+                TextField(
+                  controller: _joinRoomCtrl,
+                  decoration: const InputDecoration(labelText: 'Join Room ID'),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : _joinRoom,
+                  icon: const Icon(Icons.arrow_forward),
+                  label: const Text('Join Room'),
+                ),
+              ],
             ),
-            const Divider(height: 24),
-            TextField(
-              controller: _joinRoomCtrl,
-              decoration: const InputDecoration(labelText: 'Join Room ID'),
-            ),
-            const SizedBox(height: 8),
-            OutlinedButton(onPressed: _busy ? null : _joinRoom, child: const Text('Join Room')),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildStatus(ThemeData theme) {
+  Widget _buildTopMessage(ThemeData theme) {
+    if (!_showTopMessage) {
+      return const SizedBox.shrink();
+    }
+
     final isError = _messageTone == 'error' || _message.startsWith('Error:');
     final isSuccess = _messageTone == 'success';
     final bg = isError ? const Color(0xFFFEF3F2) : (isSuccess ? const Color(0xFFEAF7EF) : const Color(0xFFF8FAFC));
     final border = isError ? const Color(0xFFFDA29B) : (isSuccess ? const Color(0xFFA6D8B8) : const Color(0xFFD5E3F7));
     final fg = isError ? const Color(0xFFB42318) : (isSuccess ? const Color(0xFF027A48) : const Color(0xFF344054));
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: border),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            isError ? Icons.error_outline : (isSuccess ? Icons.check_circle_outline : Icons.info_outline),
-            color: fg,
-            size: 18,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(_message, style: theme.textTheme.bodyLarge?.copyWith(color: fg)),
-          ),
-        ],
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 260),
+      opacity: _topMessageOpacity,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: border),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              isError ? Icons.error_outline : (isSuccess ? Icons.check_circle_outline : Icons.info_outline),
+              color: fg,
+              size: 18,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                _message,
+                style: theme.textTheme.bodyMedium?.copyWith(color: fg, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

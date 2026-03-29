@@ -12,7 +12,7 @@
             "toolArgs": [
                 "--web-port",
                 "5001",
-                "--web-browser-flag=--user-data-dir=F:/tmp/boardgame_acquire_chrome_a"
+                "--web-browser-flag=--user-data-dir=${workspaceFolder}/.vscode/boardgame_acquire_chrome_a"
             ]
         },
         {
@@ -23,7 +23,7 @@
             "toolArgs": [
                 "--web-port",
                 "5002",
-                "--web-browser-flag=--user-data-dir=F:/tmp/boardgame_acquire_chrome_b"
+                "--web-browser-flag=--user-data-dir=${workspaceFolder}/.vscode/boardgame_acquire_chrome_b"
             ]
         }
     ],

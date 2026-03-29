@@ -48,6 +48,10 @@ app.*.map.json
 /target
 /logs
 
+# debug chrome local cache
+
+/.vscode/boardgame*
+
 # local test skills
 skills-lock.json
 .github/skills/
