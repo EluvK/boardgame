@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../i18n/app_i18n.dart';
 import '../../../room/room_session.dart';
 import '../data/acquire_client.dart';
 import '../data/acquire_models.dart';
@@ -36,6 +37,10 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
   bool? _roomStateCollapsed = false;
   bool? _roomStateAutoCollapsed = false;
   final Map<String, String> _playerNamesById = {};
+
+  String _t({required String zh, required String en}) {
+    return AppI18n.of(context).acquire.text(zh: zh, en: en);
+  }
 
   @override
   void initState() {
@@ -625,30 +630,81 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         ? const <String>[]
         : ((state.mergeSettlement?.pending[widget.session.userId] ?? const <String>{}).toList()..sort());
     final canActNow = state != null && _roomStarted && !_busy && !_leaving && isMyTurn;
+    final showDesktopScrollbar = switch (theme.platform) {
+      TargetPlatform.macOS || TargetPlatform.windows || TargetPlatform.linux => true,
+      _ => false,
+    };
 
     return Scaffold(
-      appBar: AppBar(title: Text('Room: ${widget.session.roomId}')),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1400),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildRoomControlBar(),
-                const SizedBox(height: 8),
-                if (!(_roomStateCollapsed ?? false))
-                  _buildRoomStateCard(theme, envelope, state, isMyTurn, canActNow, myPendingMergeCompanies),
-                const SizedBox(height: 8),
-                _buildTurnHintBar(theme, state, isMyTurn, canActNow, myPendingMergeCompanies),
-                const SizedBox(height: 12),
-                _buildWorkspace(theme, state, isMyTurn, canActNow, myPendingMergeCompanies),
-              ],
+      appBar: AppBar(
+        elevation: 0,
+        title: Text(_t(zh: '房间: ${widget.session.roomId}', en: 'Room: ${widget.session.roomId}')),
+      ),
+      body: DecoratedBox(
+        decoration: _buildPageBackgroundDecoration(),
+        child: Scrollbar(
+          thumbVisibility: showDesktopScrollbar,
+          child: SingleChildScrollView(
+            primary: true,
+            padding: const EdgeInsets.all(16),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1400),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildRoomControlBar(),
+                    const SizedBox(height: 8),
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 240),
+                      switchInCurve: Curves.easeOutCubic,
+                      switchOutCurve: Curves.easeInCubic,
+                      child: (_roomStateCollapsed ?? false)
+                          ? const SizedBox.shrink()
+                          : _buildRoomStateCard(
+                              theme,
+                              envelope,
+                              state,
+                              isMyTurn,
+                              canActNow,
+                              myPendingMergeCompanies,
+                            ),
+                    ),
+                    const SizedBox(height: 8),
+                    _buildTurnHintBar(theme, state, isMyTurn, canActNow, myPendingMergeCompanies),
+                    const SizedBox(height: 12),
+                    _buildWorkspace(theme, state, isMyTurn, canActNow, myPendingMergeCompanies),
+                  ],
+                ),
+              ),
             ),
           ),
         ),
       ),
+    );
+  }
+
+  Decoration _buildPageBackgroundDecoration() {
+    return const BoxDecoration(
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: <Color>[Color(0xFFF7FBFF), Color(0xFFF5F7FF), Color(0xFFF8FCFA)],
+      ),
+    );
+  }
+
+  Widget _surfaceCard({required Widget child}) {
+    return Card(
+      margin: EdgeInsets.zero,
+      elevation: 1.5,
+      color: const Color(0xFFFCFEFF),
+      shadowColor: const Color(0xFF0F172A).withValues(alpha: 0.08),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: const Color(0xFFD5DCEA).withValues(alpha: 0.78)),
+      ),
+      child: child,
     );
   }
 
@@ -665,20 +721,25 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
             });
           },
           icon: Icon(collapsed ? Icons.unfold_more : Icons.unfold_less),
-          label: Text(collapsed ? 'Expand Room State' : 'Collapse Room State'),
+          label: Text(_t(zh: collapsed ? '展开房间状态' : '收起房间状态', en: collapsed ? 'Expand Room State' : 'Collapse Room State')),
         ),
         OutlinedButton(
           onPressed: _leaving || _busy || _settingReady || _roomStarted ? null : () => _setReady(!_isReady),
           child: Text(
             _roomStarted
-                ? 'Game Started'
-                : (_settingReady ? 'Updating Ready...' : (_isReady ? 'Cancel Ready' : 'Ready')),
+                ? _t(zh: '游戏已开始', en: 'Game Started')
+                : (_settingReady
+                      ? _t(zh: '正在更新准备状态...', en: 'Updating Ready...')
+                      : (_isReady ? _t(zh: '取消准备', en: 'Cancel Ready') : _t(zh: '准备', en: 'Ready'))),
           ),
         ),
-        ElevatedButton(onPressed: () => Navigator.of(context).maybePop(), child: const Text('Back to Lobby')),
+        ElevatedButton(
+          onPressed: () => Navigator.of(context).maybePop(),
+          child: Text(_t(zh: '返回大厅', en: 'Back to Lobby')),
+        ),
         OutlinedButton(
           onPressed: _leaving || _busy ? null : _leaveRoom,
-          child: Text(_leaving ? 'Leaving...' : 'Leave Room'),
+          child: Text(_leaving ? _t(zh: '正在离开...', en: 'Leaving...') : _t(zh: '离开房间', en: 'Leave Room')),
         ),
       ],
     );
@@ -698,36 +759,39 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     IconData icon;
 
     if (_busy) {
-      message = 'Submitting action...';
+      message = _t(zh: '正在提交操作...', en: 'Submitting action...');
       bg = const Color(0xFFEFF4FF);
       border = const Color(0xFFBFD2FF);
       fg = const Color(0xFF1D4ED8);
       icon = Icons.hourglass_top_rounded;
     } else if (!_roomStarted) {
-      message = 'Waiting for all players to be ready.';
+      message = _t(zh: '等待所有玩家准备完成。', en: 'Waiting for all players to be ready.');
       bg = const Color(0xFFFFF7E8);
       border = const Color(0xFFF1D39A);
       fg = const Color(0xFF9A6700);
       icon = Icons.group_outlined;
     } else if (state == null) {
-      message = 'Waiting for latest game state...';
+      message = _t(zh: '等待最新游戏状态...', en: 'Waiting for latest game state...');
       bg = const Color(0xFFF8FAFC);
       border = const Color(0xFFD0D7E5);
       fg = const Color(0xFF475467);
       icon = Icons.sync;
     } else if (state.phase == 'merge_stock_decision' && isMyTurn && myPendingMergeCompanies.isNotEmpty) {
-      message = 'Your turn to decide merge stocks: ${myPendingMergeCompanies.join(', ')}.';
+      message = _t(
+        zh: '轮到你进行并购股票决策: ${myPendingMergeCompanies.join(', ')}。',
+        en: 'Your turn to decide merge stocks: ${myPendingMergeCompanies.join(', ')}.',
+      );
       bg = const Color(0xFFE7F9F8);
       border = const Color(0xFF9EDFD9);
       fg = const Color(0xFF0B7A75);
       icon = Icons.priority_high_rounded;
     } else if (canActNow && isMyTurn) {
       message = switch (state.phase) {
-        'place' => 'Your turn: place a tile from your hand.',
-        'buy' => 'Your turn: buy up to 3 shares.',
-        'choose_company' => 'Your turn: choose a company to found.',
-        'resolve_merge' => 'Your turn: choose the surviving company.',
-        _ => 'Your turn: proceed with the current action.',
+        'place' => _t(zh: '轮到你：从手牌中落子。', en: 'Your turn: place a tile from your hand.'),
+        'buy' => _t(zh: '轮到你：最多买入 3 股。', en: 'Your turn: buy up to 3 shares.'),
+        'choose_company' => _t(zh: '轮到你：选择要创办的公司。', en: 'Your turn: choose a company to found.'),
+        'resolve_merge' => _t(zh: '轮到你：选择并购幸存公司。', en: 'Your turn: choose the surviving company.'),
+        _ => _t(zh: '轮到你：执行当前阶段动作。', en: 'Your turn: proceed with the current action.'),
       };
       bg = const Color(0xFFE7F9F8);
       border = const Color(0xFF9EDFD9);
@@ -738,15 +802,15 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       if (state.phase == 'merge_stock_decision') {
         final decider = currentPlayerName.trim();
         message = decider.isEmpty
-            ? 'Waiting for merge stock decisions.'
-            : 'Waiting for $decider to decide merge stocks.';
+            ? _t(zh: '等待并购股票决策。', en: 'Waiting for merge stock decisions.')
+            : _t(zh: '等待 $decider 进行并购股票决策。', en: 'Waiting for $decider to decide merge stocks.');
       } else {
         message = switch (state.phase) {
-          'place' => 'Waiting for $currentPlayerName to place a tile.',
-          'buy' => 'Waiting for $currentPlayerName to complete buy step.',
-          'choose_company' => 'Waiting for $currentPlayerName to choose a company.',
-          'resolve_merge' => 'Waiting for $currentPlayerName to resolve merge.',
-          _ => 'Waiting for $currentPlayerName to act.',
+          'place' => _t(zh: '等待 $currentPlayerName 落子。', en: 'Waiting for $currentPlayerName to place a tile.'),
+          'buy' => _t(zh: '等待 $currentPlayerName 完成买股。', en: 'Waiting for $currentPlayerName to complete buy step.'),
+          'choose_company' => _t(zh: '等待 $currentPlayerName 选择公司。', en: 'Waiting for $currentPlayerName to choose a company.'),
+          'resolve_merge' => _t(zh: '等待 $currentPlayerName 处理并购。', en: 'Waiting for $currentPlayerName to resolve merge.'),
+          _ => _t(zh: '等待 $currentPlayerName 行动。', en: 'Waiting for $currentPlayerName to act.'),
         };
       }
       bg = const Color(0xFFF8FAFC);
@@ -755,13 +819,22 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       icon = Icons.schedule;
     }
 
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: border),
+        boxShadow: [
+          BoxShadow(
+            color: fg.withValues(alpha: 0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Row(
         children: [
@@ -788,52 +861,58 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final isNarrow = constraints.maxWidth < 1100;
-
-        if (isNarrow) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildBoardCard(theme, state, isMyTurn),
-              const SizedBox(height: 12),
-              _buildActionCard(theme, state, isMyTurn, canActNow, myPendingMergeCompanies),
-              const SizedBox(height: 12),
-              _buildCompaniesCard(theme, state),
-              const SizedBox(height: 12),
-              _buildPlayersCard(theme, state),
-              const SizedBox(height: 12),
-              SizedBox(height: 320, child: _buildActivityCard(theme)),
-            ],
-          );
-        }
-
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
+        final content = isNarrow
+            ? Column(
+                key: const ValueKey<String>('workspace_narrow'),
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _buildBoardCard(theme, state, isMyTurn),
                   const SizedBox(height: 12),
                   _buildActionCard(theme, state, isMyTurn, canActNow, myPendingMergeCompanies),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            SizedBox(
-              width: 360,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+                  const SizedBox(height: 12),
                   _buildCompaniesCard(theme, state),
                   const SizedBox(height: 12),
                   _buildPlayersCard(theme, state),
                   const SizedBox(height: 12),
-                  SizedBox(height: 300, child: _buildActivityCard(theme)),
+                  SizedBox(height: 320, child: _buildActivityCard(theme)),
                 ],
-              ),
-            ),
-          ],
+              )
+            : Row(
+                key: const ValueKey<String>('workspace_wide'),
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _buildBoardCard(theme, state, isMyTurn),
+                        const SizedBox(height: 12),
+                        _buildActionCard(theme, state, isMyTurn, canActNow, myPendingMergeCompanies),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  SizedBox(
+                    width: 360,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _buildCompaniesCard(theme, state),
+                        const SizedBox(height: 12),
+                        _buildPlayersCard(theme, state),
+                        const SizedBox(height: 12),
+                        SizedBox(height: 300, child: _buildActivityCard(theme)),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+
+        return AnimatedSwitcher(
+          duration: const Duration(milliseconds: 280),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          child: content,
         );
       },
     );
@@ -844,7 +923,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     final activeTile = _activeInfoTile;
     final activeCompanyId = _activeInfoCompanyId;
 
-    return Card(
+    return _surfaceCard(
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
@@ -855,7 +934,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
               runSpacing: 4,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Text('Board', style: theme.textTheme.titleLarge),
+                Text(_t(zh: '棋盘', en: 'Board'), style: theme.textTheme.titleLarge),
                 if (state != null) Text('placed=${state.tiles.length}', style: theme.textTheme.bodySmall),
                 if (activeTile != null)
                   Text(
@@ -873,14 +952,14 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
             if (state == null)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 24),
-                child: Center(child: Text('Waiting for state snapshot...')),
+                child: Center(child: Text('Waiting for state snapshot... / 等待状态快照...')),
               )
             else
               AspectRatio(aspectRatio: 12 / 9, child: _buildBoardGrid(state, canPlace)),
             if (state != null) ...[
               const SizedBox(height: 10),
               Text(
-                'Tip: click tile to show info below.',
+                _t(zh: '提示：点击格子可在下方查看详情。', en: 'Tip: click tile to show info below.'),
                 style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF667085)),
               ),
               if (activeTile != null || activeCompanyId != null) ...[
@@ -1041,122 +1120,140 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
           bottomLeft: (!sameLeft && !sameDown) ? radius : Radius.zero,
           bottomRight: (!sameRight && !sameDown) ? radius : Radius.zero,
         );
+        final canTapPlace = canPlace && inHand;
+        final tooltip = canTapPlace
+            ? 'Place tile: $pos'
+            : (companyId == null ? 'Tile $pos' : 'Tile $pos  •  $companyId');
 
-        return Material(
-          color: color,
-          borderRadius: borderRadius,
-          child: InkWell(
-            borderRadius: borderRadius,
-            onTap: () {
-              _pinBoardInfo(pos, companyId);
-              if (canPlace && inHand) {
-                _runAction(() => _client.place(room: widget.session.roomId, userId: widget.session.userId, pos: pos));
-              }
-            },
-            child: Container(
-              decoration: BoxDecoration(
-                border: border,
+        return Tooltip(
+          message: tooltip,
+          waitDuration: const Duration(milliseconds: 320),
+          child: MouseRegion(
+            cursor: canTapPlace ? SystemMouseCursors.click : SystemMouseCursors.basic,
+            child: Material(
+              color: color,
+              borderRadius: borderRadius,
+              child: InkWell(
                 borderRadius: borderRadius,
-                boxShadow: isCompanyHover
-                    ? [
-                        BoxShadow(
-                          color: _companyColor(companyId).withValues(alpha: 0.24),
-                          blurRadius: 3,
-                          spreadRadius: 0.4,
-                        ),
-                      ]
-                    : null,
-              ),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final compact = constraints.maxWidth < 40;
-                  final posFontSize = compact ? 8.6 : 11.2;
-                  final badgePadding = compact
-                      ? const EdgeInsets.symmetric(horizontal: 2.4, vertical: 1.4)
-                      : const EdgeInsets.symmetric(horizontal: 4.8, vertical: 1.8);
-                  final badgeMaxWidth = (constraints.maxWidth - (compact ? 1 : 3)).clamp(12.0, 64.0);
-                  final posBadgeBg = isCompanyHover
-                      ? const Color(0xFFE2E8F0).withValues(alpha: 0.96)
-                      : const Color(0xFFE5E7EB).withValues(alpha: 0.92);
-                  const posBadgeFg = Color(0xFF1F2937);
-                  return Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      if (companyId != null && !compact)
-                        Positioned(
-                          right: compact ? 1 : 2,
-                          bottom: compact ? 1 : 2,
-                          child: Container(
-                            padding: badgePadding,
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: isCompanyHover ? 0.32 : 0.18),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              companyId[0],
-                              style: TextStyle(fontSize: compact ? 8.0 : 9.0, fontWeight: FontWeight.w700, color: fg),
-                            ),
-                          ),
-                        ),
-                      if (inHand)
-                        Positioned(
-                          right: compact ? 1 : 2,
-                          top: compact ? 1 : 2,
-                          child: Container(
-                            width: compact ? 11 : 14,
-                            height: compact ? 11 : 14,
-                            decoration: BoxDecoration(
-                              color: canPlace ? const Color(0xFF0A7E8C) : const Color(0xFF334155),
-                              borderRadius: BorderRadius.circular(3),
-                              border: Border.all(color: Colors.white.withValues(alpha: 0.78), width: 0.7),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.14),
-                                  blurRadius: 1.2,
-                                  offset: const Offset(0, 0.6),
-                                ),
-                              ],
-                            ),
-                            child: Icon(
-                              Icons.check_rounded,
-                              size: compact ? 8.0 : 10.0,
-                              color: const Color(0xFFF8FAFC),
-                            ),
-                          ),
-                        ),
-                      Positioned(
-                        left: compact ? 1 : 2,
-                        top: compact ? 1 : 2,
-                        child: Container(
-                          padding: badgePadding,
-                          constraints: BoxConstraints(
-                            minWidth: compact ? 12 : 15,
-                            minHeight: compact ? 10 : 12,
-                            maxWidth: badgeMaxWidth,
-                          ),
-                          decoration: BoxDecoration(
-                            color: posBadgeBg,
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: const Color(0xFF334155).withValues(alpha: 0.36), width: 0.7),
-                          ),
-                          child: Text(
-                            pos,
-                            maxLines: 1,
-                            softWrap: false,
-                            // overflow: TextOverflow.fade,
-                            textScaler: TextScaler.noScaling,
-                            style: TextStyle(
-                              fontSize: posFontSize,
-                              height: 1,
-                              fontWeight: FontWeight.w900,
-                              color: posBadgeFg,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
+                onTap: () {
+                  _pinBoardInfo(pos, companyId);
+                  if (canPlace && inHand) {
+                    _runAction(() => _client.place(room: widget.session.roomId, userId: widget.session.userId, pos: pos));
+                  }
                 },
+                child: Container(
+                  decoration: BoxDecoration(
+                    border: border,
+                    borderRadius: borderRadius,
+                    boxShadow: isCompanyHover
+                        ? [
+                            BoxShadow(
+                              color: _companyColor(companyId).withValues(alpha: 0.24),
+                              blurRadius: 3,
+                              spreadRadius: 0.4,
+                            ),
+                          ]
+                        : null,
+                  ),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final compact = constraints.maxWidth < 40;
+                      final posFontSize = compact ? 8.6 : 11.2;
+                      final badgePadding = compact
+                          ? const EdgeInsets.symmetric(horizontal: 2.4, vertical: 1.4)
+                          : const EdgeInsets.symmetric(horizontal: 4.8, vertical: 1.8);
+                      final badgeMaxWidth = (constraints.maxWidth - (compact ? 1 : 3)).clamp(12.0, 64.0);
+                      final posBadgeBg = isCompanyHover
+                          ? const Color(0xFFE2E8F0).withValues(alpha: 0.96)
+                          : const Color(0xFFE5E7EB).withValues(alpha: 0.92);
+                      const posBadgeFg = Color(0xFF1F2937);
+                      return Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          if (companyId != null && !compact)
+                            Positioned(
+                              right: compact ? 1 : 2,
+                              bottom: compact ? 1 : 2,
+                              child: Container(
+                                padding: badgePadding,
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: isCompanyHover ? 0.32 : 0.18),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  companyId[0],
+                                  style: TextStyle(
+                                    fontSize: compact ? 8.0 : 9.0,
+                                    fontWeight: FontWeight.w700,
+                                    color: fg,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          if (inHand)
+                            Positioned(
+                              right: compact ? 1 : 2,
+                              top: compact ? 1 : 2,
+                              child: Container(
+                                width: compact ? 11 : 14,
+                                height: compact ? 11 : 14,
+                                decoration: BoxDecoration(
+                                  color: canPlace ? const Color(0xFF0A7E8C) : const Color(0xFF334155),
+                                  borderRadius: BorderRadius.circular(3),
+                                  border: Border.all(color: Colors.white.withValues(alpha: 0.78), width: 0.7),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.14),
+                                      blurRadius: 1.2,
+                                      offset: const Offset(0, 0.6),
+                                    ),
+                                  ],
+                                ),
+                                child: Icon(
+                                  Icons.check_rounded,
+                                  size: compact ? 8.0 : 10.0,
+                                  color: const Color(0xFFF8FAFC),
+                                ),
+                              ),
+                            ),
+                          Positioned(
+                            left: compact ? 1 : 2,
+                            top: compact ? 1 : 2,
+                            child: Container(
+                              padding: badgePadding,
+                              constraints: BoxConstraints(
+                                minWidth: compact ? 12 : 15,
+                                minHeight: compact ? 10 : 12,
+                                maxWidth: badgeMaxWidth,
+                              ),
+                              decoration: BoxDecoration(
+                                color: posBadgeBg,
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(
+                                  color: const Color(0xFF334155).withValues(alpha: 0.36),
+                                  width: 0.7,
+                                ),
+                              ),
+                              child: Text(
+                                pos,
+                                maxLines: 1,
+                                softWrap: false,
+                                // overflow: TextOverflow.fade,
+                                textScaler: TextScaler.noScaling,
+                                style: TextStyle(
+                                  fontSize: posFontSize,
+                                  height: 1,
+                                  fontWeight: FontWeight.w900,
+                                  color: posBadgeFg,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
               ),
             ),
           ),
@@ -1198,14 +1295,14 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
             if (envelope != null && envelope.event.isNotEmpty) 'last_event: ${envelope.event}',
           ];
 
-    return Card(
+    return _surfaceCard(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: LayoutBuilder(
           builder: (context, constraints) {
             final split = constraints.maxWidth >= 900;
-            final roomPanel = _buildInfoPanel(theme, 'Room Info', roomInfo);
-            final statePanel = _buildInfoPanel(theme, 'Game State', gameInfo);
+            final roomPanel = _buildInfoPanel(theme, _t(zh: '房间信息', en: 'Room Info'), roomInfo);
+            final statePanel = _buildInfoPanel(theme, _t(zh: '游戏状态', en: 'Game State'), gameInfo);
 
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1228,7 +1325,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                 _buildStateHighlights(theme, state, isMyTurn, canActNow),
                 if (!_roomStarted) ...[
                   const SizedBox(height: 8),
-                  Text('Game will start when all players are ready.', style: theme.textTheme.bodySmall),
+                  Text(_t(zh: '所有玩家准备后将自动开始游戏。', en: 'Game will start when all players are ready.'), style: theme.textTheme.bodySmall),
                 ],
                 if (_error != null) ...[
                   const SizedBox(height: 8),
@@ -1251,18 +1348,18 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       runSpacing: 6,
       children: [
         _buildStatusChip(
-          label: waitingReady ? 'WAIT_READY' : 'STARTED',
+          label: waitingReady ? _t(zh: '待准备', en: 'WAIT_READY') : _t(zh: '已开始', en: 'STARTED'),
           bgColor: waitingReady ? const Color(0xFFFFF5E6) : const Color(0xFFEAF7EF),
           fgColor: waitingReady ? const Color(0xFFB26A00) : const Color(0xFF1E7D39),
         ),
-        _buildStatusChip(label: 'PHASE: $phase', bgColor: const Color(0xFFEFF4FF), fgColor: const Color(0xFF1D4ED8)),
+        _buildStatusChip(label: _t(zh: '阶段: $phase', en: 'PHASE: $phase'), bgColor: const Color(0xFFEFF4FF), fgColor: const Color(0xFF1D4ED8)),
         _buildStatusChip(
-          label: isMyTurn ? 'MY TURN' : 'WAIT TURN',
+          label: isMyTurn ? _t(zh: '我的回合', en: 'MY TURN') : _t(zh: '等待回合', en: 'WAIT TURN'),
           bgColor: isMyTurn ? const Color(0xFFE7F9F8) : const Color(0xFFF3F4F6),
           fgColor: isMyTurn ? const Color(0xFF0B7A75) : const Color(0xFF4B5563),
         ),
         _buildStatusChip(
-          label: canActNow ? 'CAN ACT' : 'READ ONLY',
+          label: canActNow ? _t(zh: '可操作', en: 'CAN ACT') : _t(zh: '只读', en: 'READ ONLY'),
           bgColor: canActNow ? const Color(0xFFEAF7EF) : const Color(0xFFF3F4F6),
           fgColor: canActNow ? const Color(0xFF1E7D39) : const Color(0xFF4B5563),
         ),
@@ -1318,42 +1415,71 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     final myPhase = state.phase;
     final canOperate = canActNow;
     final myHandSize = (state.playerTiles[widget.session.userId] ?? const <String>{}).length;
+    final phaseKey = '$myPhase:$isMyTurn:${myPendingMergeCompanies.join('|')}';
 
-    return Card(
+    Widget phasePanel;
+    if (myPhase == 'buy' && isMyTurn) {
+      phasePanel = _buildBuyPanel(theme, state, canOperate);
+    } else if (myPhase == 'choose_company' && isMyTurn) {
+      phasePanel = _buildChooseCompanyPanel(theme, state, canOperate);
+    } else if (myPhase == 'resolve_merge' && isMyTurn) {
+      phasePanel = _buildResolveMergePanel(theme, state, canOperate);
+    } else if (myPhase == 'merge_stock_decision' && isMyTurn && myPendingMergeCompanies.isNotEmpty) {
+      phasePanel = _buildMergeStockDecisionPanel(theme, state, canOperate, myPendingMergeCompanies);
+    } else if (myPhase == 'merge_stock_decision' && !isMyTurn && myPendingMergeCompanies.isNotEmpty) {
+      phasePanel = Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFD0D7E5)),
+        ),
+        child: Text(
+          _t(
+            zh: '等待 ${_playerDisplayName(state.currentPlayer)} 完成并购股票决策。',
+            en: 'Waiting for ${_playerDisplayName(state.currentPlayer)} to complete merge stock decisions.',
+          ),
+          style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFF475467), fontWeight: FontWeight.w700),
+        ),
+      );
+    } else {
+      phasePanel = Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFD0D7E5)),
+        ),
+        child: Text(
+            isMyTurn
+              ? _t(zh: '当前阶段没有额外操作面板。', en: 'Current phase has no extra action panel.')
+              : _t(zh: '等待当前玩家行动。', en: 'Waiting for current player action.'),
+          style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFF475467), fontWeight: FontWeight.w600),
+        ),
+      );
+    }
+
+    return _surfaceCard(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Actions', style: theme.textTheme.titleLarge),
+            Text(_t(zh: '操作区', en: 'Actions'), style: theme.textTheme.titleLarge),
             const SizedBox(height: 8),
-            if (myPhase == 'buy' && isMyTurn) _buildBuyPanel(theme, state, canOperate),
-            if (myPhase == 'choose_company' && isMyTurn) _buildChooseCompanyPanel(theme, state, canOperate),
-            if (myPhase == 'resolve_merge' && isMyTurn) _buildResolveMergePanel(theme, state, canOperate),
-            if (myPhase == 'merge_stock_decision' && isMyTurn && myPendingMergeCompanies.isNotEmpty)
-              _buildMergeStockDecisionPanel(theme, state, canOperate, myPendingMergeCompanies),
-            if (myPhase == 'merge_stock_decision' && !isMyTurn && myPendingMergeCompanies.isNotEmpty)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF8FAFC),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFFD0D7E5)),
-                ),
-                child: Text(
-                  'Waiting for ${_playerDisplayName(state.currentPlayer)} to complete merge stock decisions.',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: const Color(0xFF475467),
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              child: KeyedSubtree(key: ValueKey<String>(phaseKey), child: phasePanel),
+            ),
             const SizedBox(height: 12),
             const Divider(height: 1, thickness: 2),
             const SizedBox(height: 10),
             Text(
-              'Quick Actions',
+              _t(zh: '快捷操作', en: 'Quick Actions'),
               style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800, color: const Color(0xFF344054)),
             ),
             const SizedBox(height: 6),
@@ -1369,21 +1495,30 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  OutlinedButton(
-                    onPressed: canOperate && isMyTurn && myHandSize < 6
-                        ? () => _runAction(
-                            () => _client.drawTile(room: widget.session.roomId, userId: widget.session.userId),
-                          )
-                        : null,
-                    child: const Text('Draw Tile'),
+                  Tooltip(
+                    message: _t(zh: '手牌少于 6 张时，从牌堆抽取 1 张。', en: 'Draw 1 tile from the deck when hand size is below 6'),
+                    child: OutlinedButton(
+                      onPressed: canOperate && isMyTurn && myHandSize < 6
+                          ? () => _runAction(
+                              () => _client.drawTile(room: widget.session.roomId, userId: widget.session.userId),
+                            )
+                          : null,
+                      child: Text(_t(zh: '抽牌', en: 'Draw Tile')),
+                    ),
                   ),
-                  OutlinedButton(
-                    onPressed: canOperate && isMyTurn && (myPhase == 'place' || myPhase == 'buy')
-                        ? () => _runAction(
-                            () => _client.declareEnd(room: widget.session.roomId, userId: widget.session.userId),
-                          )
-                        : null,
-                    child: const Text('Declare End'),
+                  Tooltip(
+                    message: _t(
+                      zh: '满足条件时，可在落子/买股阶段宣布结束游戏。',
+                      en: 'Declare game end during place/buy phase when conditions are met',
+                    ),
+                    child: OutlinedButton(
+                      onPressed: canOperate && isMyTurn && (myPhase == 'place' || myPhase == 'buy')
+                          ? () => _runAction(
+                              () => _client.declareEnd(room: widget.session.roomId, userId: widget.session.userId),
+                            )
+                          : null,
+                      child: Text(_t(zh: '宣布结束', en: 'Declare End')),
+                    ),
                   ),
                 ],
               ),
@@ -1412,9 +1547,9 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Buy Shares', style: theme.textTheme.titleMedium),
+          Text(_t(zh: '买入股票', en: 'Buy Shares'), style: theme.textTheme.titleMedium),
           const SizedBox(height: 8),
-          const Text('No active company shares can be purchased now. Auto passing this buy step...'),
+          Text(_t(zh: '当前没有可买入的公司股票，自动跳过本次买股。', en: 'No active company shares can be purchased now. Auto passing this buy step...')),
         ],
       );
     }
@@ -1424,7 +1559,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       children: [
         Row(
           children: [
-            Text('Buy Shares', style: theme.textTheme.titleMedium),
+            Text(_t(zh: '买入股票', en: 'Buy Shares'), style: theme.textTheme.titleMedium),
             const Spacer(),
             ElevatedButton(
               onPressed: canOperate && !insufficientCash
@@ -1439,7 +1574,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                       ),
                     )
                   : null,
-              child: const Text('Confirm Buy'),
+              child: Text(_t(zh: '确认买入', en: 'Confirm Buy')),
             ),
           ],
         ),
@@ -1563,7 +1698,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                               });
                             }
                           : null,
-                      child: const Text('ALL IN'),
+                      child: Text(_t(zh: '全买', en: 'ALL IN')),
                     ),
                   ],
                 ),
@@ -1591,7 +1726,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                 if (selectedSummary.isNotEmpty && insufficientCash) const SizedBox(height: 6),
                 if (insufficientCash)
                   Text(
-                    'Not enough cash for current selection.',
+                    _t(zh: '当前选择超出可用现金。', en: 'Not enough cash for current selection.'),
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: const Color(0xFFB42318),
                       fontWeight: FontWeight.w700,
@@ -1619,11 +1754,11 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Choose Company', style: theme.textTheme.titleMedium),
+        Text(_t(zh: '选择公司', en: 'Choose Company'), style: theme.textTheme.titleMedium),
         const SizedBox(height: 8),
         if (foundingTiles.isNotEmpty)
           Text(
-            'Founding tiles: ${foundingTiles.join(', ')}',
+            _t(zh: '创办相关格: ${foundingTiles.join(', ')}', en: 'Founding tiles: ${foundingTiles.join(', ')}'),
             style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF475467), fontWeight: FontWeight.w600),
           ),
         if (foundingTiles.isNotEmpty) const SizedBox(height: 8),
@@ -1665,7 +1800,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Resolve Merge', style: theme.textTheme.titleMedium),
+        Text(_t(zh: '处理并购', en: 'Resolve Merge'), style: theme.textTheme.titleMedium),
         const SizedBox(height: 8),
         Wrap(
           spacing: 8,
@@ -1682,7 +1817,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                           ),
                         )
                       : null,
-                  child: Text('Survivor: $s'),
+                  child: Text(_t(zh: '幸存公司: $s', en: 'Survivor: $s')),
                 ),
               )
               .toList(),
@@ -1709,9 +1844,10 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Merge Stock Decision', style: theme.textTheme.titleMedium),
+        Text(_t(zh: '并购股票决策', en: 'Merge Stock Decision'), style: theme.textTheme.titleMedium),
         const SizedBox(height: 8),
-        if (companies.isEmpty) const Text('No pending merge stock decisions for me.'),
+        if (companies.isEmpty)
+          Text(_t(zh: '当前没有待处理的并购股票决策。', en: 'No pending merge stock decisions for me.')),
         if (companies.isNotEmpty)
           Wrap(
             spacing: 8,
@@ -1801,7 +1937,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                                   ),
                                 )
                               : null,
-                          child: const Text('Hold'),
+                          child: Text(_t(zh: '持有', en: 'Hold')),
                         ),
                         OutlinedButton(
                           onPressed: canSell
@@ -1815,7 +1951,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                                   ),
                                 )
                               : null,
-                          child: Text('Sell $sellShares (+\$$sellValue)'),
+                          child: Text(_t(zh: '卖出 $sellShares (+\$$sellValue)', en: 'Sell $sellShares (+\$$sellValue)')),
                         ),
                         OutlinedButton(
                           onPressed: canTrade
@@ -1829,7 +1965,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                                   ),
                                 )
                               : null,
-                          child: Text('Trade $tradeShares -> $tradeNewShares (~\$$tradeValue)'),
+                          child: Text(_t(zh: '换股 $tradeShares -> $tradeNewShares (~\$$tradeValue)', en: 'Trade $tradeShares -> $tradeNewShares (~\$$tradeValue)')),
                         ),
                       ],
                     ),
@@ -1842,7 +1978,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
         Wrap(
           spacing: 8,
           children: [
-            Text('决策股数: $_mergeShares'),
+            Text(_t(zh: '决策股数: $_mergeShares', en: 'Decision shares: $_mergeShares')),
             OutlinedButton(
               onPressed: _mergeShares > 1
                   ? () {
@@ -1926,7 +2062,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       );
     }
 
-    return Card(
+    return _surfaceCard(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -1934,9 +2070,9 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
           children: [
             Row(
               children: [
-                Text('Players', style: theme.textTheme.titleLarge),
+                Text(_t(zh: '玩家', en: 'Players'), style: theme.textTheme.titleLarge),
                 const Spacer(),
-                metricChip('count', '${players.length}'),
+                metricChip(_t(zh: '人数', en: 'count'), '${players.length}'),
               ],
             ),
             const SizedBox(height: 8),
@@ -1952,8 +2088,11 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
 
               return Padding(
                 padding: const EdgeInsets.only(bottom: 8),
-                child: Container(
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
                   width: double.infinity,
+                  transform: Matrix4.identity()..scale(isTurn ? 1.008 : 1.0),
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                   decoration: BoxDecoration(
                     color: isTurn
@@ -1963,6 +2102,15 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                     border: Border.all(
                       color: isTurn ? const Color(0xFF0B7A75).withValues(alpha: 0.45) : const Color(0xFFD0D7E5),
                     ),
+                    boxShadow: isTurn
+                        ? [
+                            BoxShadow(
+                              color: const Color(0xFF0B7A75).withValues(alpha: 0.18),
+                              blurRadius: 10,
+                              offset: const Offset(0, 3),
+                            ),
+                          ]
+                        : null,
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1992,7 +2140,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                                 borderRadius: BorderRadius.circular(999),
                               ),
                               child: Text(
-                                'ME',
+                                _t(zh: '我', en: 'ME'),
                                 style: theme.textTheme.labelSmall?.copyWith(
                                   color: const Color(0xFF1D4ED8),
                                   fontWeight: FontWeight.w800,
@@ -2007,7 +2155,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                                 borderRadius: BorderRadius.circular(999),
                               ),
                               child: Text(
-                                'TURN',
+                                _t(zh: '当前回合', en: 'TURN'),
                                 style: theme.textTheme.labelSmall?.copyWith(
                                   color: const Color(0xFF0B7A75),
                                   fontWeight: FontWeight.w800,
@@ -2029,7 +2177,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                         spacing: 6,
                         runSpacing: 6,
                         children: [
-                          if (nonZero.isEmpty) metricChip('holding', '-'),
+                          if (nonZero.isEmpty) metricChip(_t(zh: '持股', en: 'holding'), '-'),
                           ...nonZero.map((e) => companyHoldingChip(e.key, e.value)),
                         ],
                       ),
@@ -2040,7 +2188,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
             }),
             if (state.gameOver && state.finalStandings.isNotEmpty) ...[
               const Divider(height: 24),
-              Text('Final Standings', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+              Text(_t(zh: '最终排名', en: 'Final Standings'), style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
               const SizedBox(height: 6),
               ...state.finalStandings.asMap().entries.map((entry) {
                 final rank = entry.key + 1;
@@ -2112,7 +2260,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       );
     }
 
-    return Card(
+    return _surfaceCard(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -2120,11 +2268,11 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
           children: [
             Row(
               children: [
-                Text('Companies', style: theme.textTheme.titleLarge),
+                Text(_t(zh: '公司', en: 'Companies'), style: theme.textTheme.titleLarge),
                 const Spacer(),
-                metricChip('active', '${companies.length}'),
+                metricChip(_t(zh: '活跃', en: 'active'), '${companies.length}'),
                 const SizedBox(width: 6),
-                metricChip('safe', '$safeCount', tint: const Color(0xFF0F766E)),
+                metricChip(_t(zh: '安全', en: 'safe'), '$safeCount', tint: const Color(0xFF0F766E)),
               ],
             ),
             const SizedBox(height: 8),
@@ -2137,7 +2285,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: const Color(0xFFD0D7E5)),
                 ),
-                child: Text('No active companies.', style: theme.textTheme.bodyMedium),
+                child: Text(_t(zh: '当前没有活跃公司。', en: 'No active companies.'), style: theme.textTheme.bodyMedium),
               ),
             if (companies.isNotEmpty)
               ...companies.map((entry) {
@@ -2179,7 +2327,7 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                                   borderRadius: BorderRadius.circular(999),
                                 ),
                                 child: Text(
-                                  'SAFE',
+                                  _t(zh: '安全', en: 'SAFE'),
                                   style: theme.textTheme.labelSmall?.copyWith(
                                     color: const Color(0xFF0F766E),
                                     fontWeight: FontWeight.w800,
@@ -2187,9 +2335,9 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
                                 ),
                               ),
                             const SizedBox(width: 6),
-                            metricChip('tier', '$tier', tint: color),
+                            metricChip(_t(zh: '等级', en: 'tier'), '$tier', tint: color),
                             const SizedBox(width: 6),
-                            metricChip('size', '$size', tint: color),
+                            metricChip(_t(zh: '规模', en: 'size'), '$size', tint: color),
                           ],
                         ),
                         const SizedBox(height: 6),
@@ -2221,15 +2369,15 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
               }),
             if (state.mergeContext != null) ...[
               const Divider(height: 24),
-              Text('Merge Context', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+              Text(_t(zh: '并购上下文', en: 'Merge Context'), style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
               const SizedBox(height: 6),
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
                 children: [
-                  metricChip('placed', state.mergeContext!.placedPos),
-                  metricChip('candidates', '${state.mergeContext!.candidates.length}'),
-                  metricChip('survivors', '${state.mergeContext!.allowedSurvivors.length}'),
+                  metricChip(_t(zh: '落子', en: 'placed'), state.mergeContext!.placedPos),
+                  metricChip(_t(zh: '候选', en: 'candidates'), '${state.mergeContext!.candidates.length}'),
+                  metricChip(_t(zh: '幸存', en: 'survivors'), '${state.mergeContext!.allowedSurvivors.length}'),
                 ],
               ),
               const SizedBox(height: 6),
@@ -2243,18 +2391,18 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
             ],
             if (state.mergeSettlement != null) ...[
               const Divider(height: 24),
-              Text('Merge Settlement', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+              Text(_t(zh: '并购结算', en: 'Merge Settlement'), style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
               const SizedBox(height: 6),
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
                 children: [
                   metricChip(
-                    'survivor',
+                    _t(zh: '幸存', en: 'survivor'),
                     state.mergeSettlement!.survivor,
                     tint: _companyColor(state.mergeSettlement!.survivor),
                   ),
-                  metricChip('losers', '${state.mergeSettlement!.losers.length}'),
+                  metricChip(_t(zh: '被并购', en: 'losers'), '${state.mergeSettlement!.losers.length}'),
                 ],
               ),
               const SizedBox(height: 6),
@@ -2295,16 +2443,16 @@ class _AcquireRoomPageState extends State<AcquireRoomPage> {
       );
     }
 
-    return Card(
+    return _surfaceCard(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Activity', style: theme.textTheme.titleLarge),
+            Text(_t(zh: '动态', en: 'Activity'), style: theme.textTheme.titleLarge),
             const SizedBox(height: 8),
             if (_activityLog.isEmpty)
-              const Text('No events yet.')
+              Text(_t(zh: '暂无事件记录。', en: 'No events yet.'))
             else
               Expanded(
                 child: ListView.builder(

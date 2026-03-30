@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:math';
 
+import '../i18n/app_i18n.dart';
 import '../api/lobby_api.dart';
 import '../models/lobby_models.dart';
 import '../room/room_detail_page.dart';
@@ -49,6 +50,10 @@ class _HomePageState extends State<HomePage> {
   List<RoomSummary> _rooms = const [];
   String? _selectedGameId;
 
+  String _t({required String zh, required String en}) {
+    return AppI18n.of(context).lobby.text(zh: zh, en: en);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -81,7 +86,7 @@ class _HomePageState extends State<HomePage> {
         return;
       }
 
-      _showMessage('Preparing lobby and auto-connecting...', tone: 'info');
+      _showMessage(_t(zh: '正在准备大厅并自动连接...', en: 'Preparing lobby and auto-connecting...'), tone: 'info');
 
       _connect(autoTriggered: true);
     });
@@ -131,7 +136,7 @@ class _HomePageState extends State<HomePage> {
       if (!mounted) {
         return false;
       }
-      _showMessage('Error: $e', tone: 'error');
+      _showMessage(_t(zh: '错误: $e', en: 'Error: $e'), tone: 'error');
     } finally {
       if (mounted) {
         setState(() {
@@ -147,7 +152,7 @@ class _HomePageState extends State<HomePage> {
     final success = await _runTask(() async {
       final deviceId = _deviceId;
       if (deviceId == null || deviceId.isEmpty) {
-        throw Exception('Device ID not ready');
+        throw Exception(_t(zh: '设备ID尚未准备好', en: 'Device ID not ready'));
       }
 
       final api = LobbyApi(serverUrl: _serverCtrl.text.trim());
@@ -167,7 +172,7 @@ class _HomePageState extends State<HomePage> {
         _connected = true;
         _authed = true;
       });
-      _showMessage('Connected and authenticated', tone: 'success');
+      _showMessage(_t(zh: '连接并鉴权成功', en: 'Connected and authenticated'), tone: 'success');
 
       await _refreshGamesAndRooms();
     });
@@ -176,7 +181,10 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
-    _showMessage('Auto-connect failed. You can adjust name and tap Connect.', tone: 'info');
+    _showMessage(
+      _t(zh: '自动连接失败。你可以调整昵称后点击连接。', en: 'Auto-connect failed. You can adjust name and tap Connect.'),
+      tone: 'info',
+    );
   }
 
   void _disconnect() {
@@ -191,7 +199,7 @@ class _HomePageState extends State<HomePage> {
       _selectedGameId = null;
       _lastLobbySyncAt = null;
     });
-    _showMessage('Disconnected', tone: 'info');
+    _showMessage(_t(zh: '已断开连接', en: 'Disconnected'), tone: 'info');
   }
 
   Future<void> _reauthWithNewName() async {
@@ -199,10 +207,10 @@ class _HomePageState extends State<HomePage> {
       final api = _api;
       final deviceId = _deviceId;
       if (api == null || !_connected) {
-        throw Exception('Connect first');
+        throw Exception(_t(zh: '请先连接', en: 'Connect first'));
       }
       if (deviceId == null || deviceId.isEmpty) {
-        throw Exception('Device ID not ready');
+        throw Exception(_t(zh: '设备ID尚未准备好', en: 'Device ID not ready'));
       }
 
       final normalizedName = _effectiveUserName(deviceId);
@@ -213,7 +221,7 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         _authed = true;
       });
-      _showMessage('Name updated', tone: 'success');
+      _showMessage(_t(zh: '昵称已更新', en: 'Name updated'), tone: 'success');
     });
   }
 
@@ -235,7 +243,7 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
-    _showMessage('Name saved', tone: 'info');
+    _showMessage(_t(zh: '昵称已保存', en: 'Name saved'), tone: 'info');
   }
 
   Future<void> _randomizeUserName() async {
@@ -280,7 +288,7 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       _userNameCtrl.text = generated;
     });
-    _showMessage('Generated a new name: $generated', tone: 'info');
+    _showMessage(_t(zh: '已生成新昵称: $generated', en: 'Generated a new name: $generated'), tone: 'info');
 
     await LobbyPreferences.saveUserName(generated);
 
@@ -292,7 +300,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _refreshGamesAndRooms() async {
     final api = _api;
     if (api == null || !_connected) {
-      throw Exception('Connect first');
+      throw Exception(_t(zh: '请先连接', en: 'Connect first'));
     }
 
     final games = await api.listGames();
@@ -308,7 +316,10 @@ class _HomePageState extends State<HomePage> {
       _selectedGameId = _resolveSelectedGame(games, _selectedGameId);
       _lastLobbySyncAt = DateTime.now();
     });
-    _showMessage('Fetched ${games.length} games, ${rooms.length} rooms', tone: 'info');
+    _showMessage(
+      _t(zh: '已获取 ${games.length} 个游戏，${rooms.length} 个房间', en: 'Fetched ${games.length} games, ${rooms.length} rooms'),
+      tone: 'info',
+    );
   }
 
   void _bindLobbyPush(LobbyApi api) {
@@ -321,7 +332,7 @@ class _HomePageState extends State<HomePage> {
         _rooms = rooms;
         _lastLobbySyncAt = DateTime.now();
       });
-      _showMessage('Lobby updated: ${rooms.length} rooms', tone: 'info');
+      _showMessage(_t(zh: '大厅已更新: ${rooms.length} 个房间', en: 'Lobby updated: ${rooms.length} rooms'), tone: 'info');
     });
   }
 
@@ -375,11 +386,11 @@ class _HomePageState extends State<HomePage> {
     await _runTask(() async {
       final api = _api;
       if (api == null || !_connected || !_authed) {
-        throw Exception('Connect and auth first');
+        throw Exception(_t(zh: '请先连接并鉴权', en: 'Connect and auth first'));
       }
       final gameId = _selectedGameId;
       if (gameId == null || gameId.isEmpty) {
-        throw Exception('No game selected');
+        throw Exception(_t(zh: '尚未选择游戏', en: 'No game selected'));
       }
       final requested = _roomIdCtrl.text.trim();
       final roomId = requested.isEmpty ? _generateRoomCode() : requested;
@@ -395,7 +406,7 @@ class _HomePageState extends State<HomePage> {
       if (!mounted) {
         return;
       }
-      _showMessage('Room "$roomId" created', tone: 'success');
+      _showMessage(_t(zh: '房间 "$roomId" 已创建', en: 'Room "$roomId" created'), tone: 'success');
     });
   }
 
@@ -403,11 +414,11 @@ class _HomePageState extends State<HomePage> {
     await _runTask(() async {
       final api = _api;
       if (api == null || !_connected || !_authed) {
-        throw Exception('Connect and auth first');
+        throw Exception(_t(zh: '请先连接并鉴权', en: 'Connect and auth first'));
       }
       final roomId = _joinRoomCtrl.text.trim();
       if (roomId.isEmpty) {
-        throw Exception('Room id is required');
+        throw Exception(_t(zh: '请输入房间号', en: 'Room id is required'));
       }
 
       await api.joinRoom(roomId);
@@ -417,7 +428,7 @@ class _HomePageState extends State<HomePage> {
           .cast<String?>()
           .firstWhere((id) => id != null && id.isNotEmpty, orElse: () => _selectedGameId);
       _openRoomDetail(roomId: roomId, gameId: resolvedGameId);
-      _showMessage('Joined room "$roomId"', tone: 'success');
+      _showMessage(_t(zh: '已加入房间 "$roomId"', en: 'Joined room "$roomId"'), tone: 'success');
     });
   }
 
@@ -425,7 +436,7 @@ class _HomePageState extends State<HomePage> {
     await _runTask(() async {
       final api = _api;
       if (api == null || !_connected || !_authed) {
-        throw Exception('Connect and auth first');
+        throw Exception(_t(zh: '请先连接并鉴权', en: 'Connect and auth first'));
       }
 
       await api.leaveRoom(roomId);
@@ -433,7 +444,7 @@ class _HomePageState extends State<HomePage> {
       if (!mounted) {
         return;
       }
-      _showMessage('Left room "$roomId"', tone: 'info');
+      _showMessage(_t(zh: '已离开房间 "$roomId"', en: 'Left room "$roomId"'), tone: 'info');
     });
   }
 
@@ -441,11 +452,11 @@ class _HomePageState extends State<HomePage> {
     final api = _api;
     final userId = _deviceId;
     if (api == null || !_connected || !_authed) {
-      _showMessage('Connect and auth first', tone: 'info');
+      _showMessage(_t(zh: '请先连接并鉴权', en: 'Connect and auth first'), tone: 'info');
       return;
     }
     if (userId == null || userId.isEmpty) {
-      _showMessage('Device ID not ready', tone: 'error');
+      _showMessage(_t(zh: '设备ID尚未准备好', en: 'Device ID not ready'), tone: 'error');
       return;
     }
 
@@ -517,13 +528,33 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final localeCtrl = AppLocaleController.instance;
+    final t = AppI18n.of(context).lobby;
     final lastSync = _lastLobbySyncAt;
     final lastSyncText = lastSync == null
-        ? 'Not synced yet'
-        : 'Updated ${lastSync.hour.toString().padLeft(2, '0')}:${lastSync.minute.toString().padLeft(2, '0')}:${lastSync.second.toString().padLeft(2, '0')}';
+      ? t.text(zh: '尚未同步', en: 'Not synced yet')
+      : t.text(
+        zh:
+          '更新时间 ${lastSync.hour.toString().padLeft(2, '0')}:${lastSync.minute.toString().padLeft(2, '0')}:${lastSync.second.toString().padLeft(2, '0')}',
+        en:
+          'Updated ${lastSync.hour.toString().padLeft(2, '0')}:${lastSync.minute.toString().padLeft(2, '0')}:${lastSync.second.toString().padLeft(2, '0')}',
+        );
 
     return Scaffold(
-      appBar: AppBar(elevation: 0, title: const Text('Boardgame Web Lobby')),
+      appBar: AppBar(
+        elevation: 0,
+        title: Text(t.text(zh: '桌游 Web 大厅', en: 'Boardgame Web Lobby')),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: FilledButton.tonalIcon(
+              onPressed: () => localeCtrl.toggle(),
+              icon: const Icon(Icons.translate_rounded, size: 18),
+              label: Text(t.text(zh: '切换到 English', en: 'Switch to 中文')),
+            ),
+          ),
+        ],
+      ),
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -577,7 +608,7 @@ class _HomePageState extends State<HomePage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  connected ? 'Connected' : 'Not connected',
+                  connected ? _t(zh: '已连接', en: 'Connected') : _t(zh: '未连接', en: 'Not connected'),
                   style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700, color: statusColor),
                 ),
                 Text(lastSyncText, style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF667085))),
@@ -599,7 +630,7 @@ class _HomePageState extends State<HomePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Server Connection', style: theme.textTheme.titleLarge),
+            Text(_t(zh: '服务器连接', en: 'Server Connection'), style: theme.textTheme.titleLarge),
             const SizedBox(height: 8),
             Container(
               width: double.infinity,
@@ -617,7 +648,7 @@ class _HomePageState extends State<HomePage> {
                       const Icon(Icons.person_outline, color: Color(0xFF1D4ED8)),
                       const SizedBox(width: 8),
                       Text(
-                        'Display Name (auto-generated, editable)',
+                        _t(zh: '显示昵称（自动生成，可编辑）', en: 'Display Name (auto-generated, editable)'),
                         style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
                       ),
                     ],
@@ -634,9 +665,9 @@ class _HomePageState extends State<HomePage> {
                     },
                     inputFormatters: [LengthLimitingTextInputFormatter(20)],
                     decoration: InputDecoration(
-                      labelText: 'Your name shown to other players',
+                      labelText: _t(zh: '展示给其他玩家的昵称', en: 'Your name shown to other players'),
                       suffixIcon: IconButton(
-                        tooltip: 'Generate random name',
+                        tooltip: _t(zh: '随机生成昵称', en: 'Generate random name'),
                         onPressed: _busy ? null : _randomizeUserName,
                         icon: const Icon(Icons.casino_outlined),
                       ),
@@ -644,7 +675,7 @@ class _HomePageState extends State<HomePage> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Tip: keep it short so room member lists stay readable.',
+                    _t(zh: '提示：昵称尽量简短，便于房间成员列表阅读。', en: 'Tip: keep it short so room member lists stay readable.'),
                     style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF475467)),
                   ),
                 ],
@@ -657,18 +688,21 @@ class _HomePageState extends State<HomePage> {
                 tilePadding: EdgeInsets.zero,
                 childrenPadding: EdgeInsets.zero,
                 title: Text(
-                  'Advanced: server address',
+                  _t(zh: '高级：服务器地址', en: 'Advanced: server address'),
                   style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFF667085)),
                 ),
                 subtitle: Text(
-                  'Usually no change needed',
+                  _t(zh: '通常无需修改', en: 'Usually no change needed'),
                   style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF98A2B3)),
                 ),
                 children: [
                   const SizedBox(height: 4),
                   TextField(
                     controller: _serverCtrl,
-                    decoration: const InputDecoration(labelText: 'Server URL', hintText: 'http://127.0.0.1:17980'),
+                    decoration: InputDecoration(
+                      labelText: _t(zh: '服务器地址', en: 'Server URL'),
+                      hintText: 'http://127.0.0.1:17980',
+                    ),
                   ),
                 ],
               ),
@@ -689,16 +723,18 @@ class _HomePageState extends State<HomePage> {
                           }
                         },
                   icon: Icon(_connected ? Icons.link_off : Icons.power_settings_new),
-                  label: Text(_connected ? 'Disconnect' : 'Connect'),
+                  label: Text(_connected ? _t(zh: '断开连接', en: 'Disconnect') : _t(zh: '连接', en: 'Connect')),
                 ),
                 if (_connected)
                   OutlinedButton.icon(
                     onPressed: _busy ? null : () => _runTask(_refreshGamesAndRooms),
                     icon: const Icon(Icons.refresh),
-                    label: const Text('Refresh Lobby'),
+                    label: Text(_t(zh: '刷新大厅', en: 'Refresh Lobby')),
                   ),
                 Text(
-                  _connected ? (_authed ? 'Online + Authed' : 'Online') : 'Offline',
+                  _connected
+                      ? (_authed ? _t(zh: '在线 + 已鉴权', en: 'Online + Authed') : _t(zh: '在线', en: 'Online'))
+                      : _t(zh: '离线', en: 'Offline'),
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: _connected ? const Color(0xFF027A48) : const Color(0xFF667085),
                     fontWeight: FontWeight.w700,
@@ -721,10 +757,10 @@ class _HomePageState extends State<HomePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Games', style: theme.textTheme.titleLarge),
+            Text(_t(zh: '游戏', en: 'Games'), style: theme.textTheme.titleLarge),
             const SizedBox(height: 8),
             if (_games.isEmpty)
-              const Text('No game registered yet')
+              Text(_t(zh: '当前还没有已注册游戏', en: 'No game registered yet'))
             else
               Wrap(
                 spacing: 8,
@@ -744,7 +780,7 @@ class _HomePageState extends State<HomePage> {
                     .toList(),
               ),
             const SizedBox(height: 12),
-            Text('Rooms', style: theme.textTheme.titleLarge),
+            Text(_t(zh: '房间', en: 'Rooms'), style: theme.textTheme.titleLarge),
             const SizedBox(height: 8),
             if (_rooms.isEmpty)
               Container(
@@ -755,7 +791,7 @@ class _HomePageState extends State<HomePage> {
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: const Color(0xFFD0D7E5)),
                 ),
-                child: const Text('No room available. Create one to get started.'),
+                child: Text(_t(zh: '当前没有可用房间，先创建一个开始吧。', en: 'No room available. Create one to get started.')),
               )
             else
               Column(
@@ -787,7 +823,7 @@ class _HomePageState extends State<HomePage> {
                                   runSpacing: 6,
                                   children: [
                                     _buildMiniTag('game', r.gameId),
-                                    _buildMiniTag('players', '$playerCount', tint: accent),
+                                    _buildMiniTag(_t(zh: '玩家', en: 'players'), '$playerCount', tint: accent),
                                   ],
                                 ),
                               ],
@@ -802,7 +838,7 @@ class _HomePageState extends State<HomePage> {
                                   _joinRoomCtrl.text = r.id;
                                   _joinRoom();
                                 },
-                          child: const Text('Join'),
+                          child: Text(_t(zh: '加入', en: 'Join')),
                         ),
                       ],
                     ),
@@ -859,12 +895,12 @@ class _HomePageState extends State<HomePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Room Actions', style: theme.textTheme.titleLarge),
+            Text(_t(zh: '房间操作', en: 'Room Actions'), style: theme.textTheme.titleLarge),
             const SizedBox(height: 8),
             sectionCard(
               icon: Icons.add_home_work_outlined,
-              title: 'Create Room',
-              subtitle: 'Creates a room and joins it immediately.',
+              title: _t(zh: '创建房间', en: 'Create Room'),
+              subtitle: _t(zh: '创建后立即加入房间。', en: 'Creates a room and joins it immediately.'),
               children: [
                 TextField(
                   controller: _roomIdCtrl,
@@ -872,10 +908,10 @@ class _HomePageState extends State<HomePage> {
                   maxLength: 4,
                   inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)],
                   decoration: InputDecoration(
-                    labelText: 'Room ID (optional, 4 digits)',
-                    hintText: 'Leave empty to auto-generate',
+                    labelText: _t(zh: '房间ID（可选，4位数字）', en: 'Room ID (optional, 4 digits)'),
+                    hintText: _t(zh: '留空则自动生成', en: 'Leave empty to auto-generate'),
                     suffixIcon: IconButton(
-                      tooltip: 'Generate room ID',
+                      tooltip: _t(zh: '生成房间ID', en: 'Generate room ID'),
                       onPressed: _busy
                           ? null
                           : () {
@@ -889,27 +925,27 @@ class _HomePageState extends State<HomePage> {
                 ElevatedButton.icon(
                   onPressed: _busy ? null : _createRoom,
                   icon: const Icon(Icons.add_box_outlined),
-                  label: const Text('Create and Join'),
+                  label: Text(_t(zh: '创建并加入', en: 'Create and Join')),
                 ),
               ],
             ),
             const SizedBox(height: 10),
             sectionCard(
               icon: Icons.login_outlined,
-              title: 'Join Existing Room',
-              subtitle: 'Joins a room by ID and opens its detail page.',
+              title: _t(zh: '加入已有房间', en: 'Join Existing Room'),
+              subtitle: _t(zh: '输入房间ID后加入并打开详情。', en: 'Joins a room by ID and opens its detail page.'),
               tint: const Color(0xFFF8FAFC),
               border: const Color(0xFFD0D7E5),
               children: [
                 TextField(
                   controller: _joinRoomCtrl,
-                  decoration: const InputDecoration(labelText: 'Join Room ID'),
+                  decoration: InputDecoration(labelText: _t(zh: '加入房间ID', en: 'Join Room ID')),
                 ),
                 const SizedBox(height: 8),
                 OutlinedButton.icon(
                   onPressed: _busy ? null : _joinRoom,
                   icon: const Icon(Icons.arrow_forward),
-                  label: const Text('Join Room'),
+                  label: Text(_t(zh: '加入房间', en: 'Join Room')),
                 ),
               ],
             ),

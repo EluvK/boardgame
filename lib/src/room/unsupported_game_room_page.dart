@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../i18n/app_i18n.dart';
 import 'room_session.dart';
 
 class UnsupportedGameRoomPage extends StatelessWidget {
@@ -12,8 +13,10 @@ class UnsupportedGameRoomPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final t = AppI18n.of(context).room;
+
     return Scaffold(
-      appBar: AppBar(title: Text('Room: ${session.roomId}')),
+      appBar: AppBar(title: Text(t.text(zh: '房间: ${session.roomId}', en: 'Room: ${session.roomId}'))),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 820),
@@ -25,12 +28,12 @@ class UnsupportedGameRoomPage extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Unsupported game view', style: Theme.of(context).textTheme.titleLarge),
+                  Text(t.text(zh: '当前游戏尚未支持客户端界面', en: 'Unsupported game view'), style: Theme.of(context).textTheme.titleLarge),
                   const SizedBox(height: 8),
-                  Text('roomId: ${session.roomId}'),
-                  Text('gameId: ${session.gameId.isEmpty ? '-' : session.gameId}'),
+                  Text(t.text(zh: '房间ID: ${session.roomId}', en: 'roomId: ${session.roomId}')),
+                  Text(t.text(zh: '游戏ID: ${session.gameId.isEmpty ? '-' : session.gameId}', en: 'gameId: ${session.gameId.isEmpty ? '-' : session.gameId}')),
                   const SizedBox(height: 8),
-                  const Text('This game does not have a client page yet.'),
+                  Text(t.text(zh: '该游戏暂未实现客户端页面。', en: 'This game does not have a client page yet.')),
                   const SizedBox(height: 12),
                   Wrap(
                     spacing: 8,
@@ -38,7 +41,7 @@ class UnsupportedGameRoomPage extends StatelessWidget {
                     children: [
                       ElevatedButton(
                         onPressed: () => Navigator.of(context).maybePop(),
-                        child: const Text('Back to Lobby'),
+                        child: Text(t.text(zh: '返回大厅', en: 'Back to Lobby')),
                       ),
                       OutlinedButton(
                         onPressed: () async {
@@ -47,7 +50,7 @@ class UnsupportedGameRoomPage extends StatelessWidget {
                             Navigator.of(context).maybePop();
                           }
                         },
-                        child: const Text('Leave Room'),
+                        child: Text(t.text(zh: '离开房间', en: 'Leave Room')),
                       ),
                     ],
                   ),
