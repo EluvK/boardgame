@@ -23,6 +23,8 @@ pub struct PlanetXState {
     pub turn_index: usize,
     pub player_steps: HashMap<String, usize>,
     pub player_target_uses: HashMap<String, usize>,
+    pub user_tokens: HashMap<String, Vec<Token>>,
+    pub revealed_sector_indexes: Vec<usize>,
     #[serde(skip, default)]
     pub choice_filters: HashMap<String, ChoiceFilter>,
     pub player_results: HashMap<String, Vec<OperationResult>>,
@@ -44,6 +46,8 @@ impl PlanetXState {
             turn_index: 0,
             player_steps: HashMap::new(),
             player_target_uses: HashMap::new(),
+            user_tokens: HashMap::new(),
+            revealed_sector_indexes: vec![],
             choice_filters: HashMap::new(),
             player_results: HashMap::new(),
         }

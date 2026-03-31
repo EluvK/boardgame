@@ -103,11 +103,57 @@ impl PlanetXGame {
                 let ok = map.locate_x(l.index, &l.pre_sector_type, &l.next_sector_type);
                 OperationResult::Locate(ok)
             }
-            Operation::ReadyPublish(_) => {
-                return Err(game::GameError::Invalid("planetx_stage_not_supported".into()));
+            Operation::ReadyPublish(rp) => {
+                let tokens = state
+                    .user_tokens
+                    .get_mut(user_id)
+                    .ok_or_else(|| game::GameError::State("planetx_user_tokens_missing".into()))?;
+                let mut edited_tokens = tokens.clone();
+                for sector in &rp.sectors {
+                    let token = edited_tokens
+                        .iter_mut()
+                        .find(|t| t.is_not_used(sector))
+                        .ok_or_else(|| game::GameError::Invalid("planetx_token_not_enough".into()))?;
+                    token.set_to_be_placed();
+                }
+                *tokens = edited_tokens;
+                OperationResult::ReadyPublish(rp.sectors.len())
             }
-            Operation::DoPublish(_) => {
-                return Err(game::GameError::Invalid("planetx_stage_not_supported".into()));
+            Operation::DoPublish(dp) => {
+                let max = state.map_type.sector_count();
+                if dp.index == 0 || dp.index > max {
+                    return Err(game::GameError::Invalid("planetx_invalid_index".into()));
+                }
+                if state.revealed_sector_indexes.contains(&dp.index) {
+                    return Err(game::GameError::Invalid("planetx_sector_already_revealed".into()));
+                }
+
+                let tokens = state
+                    .user_tokens
+                    .get_mut(user_id)
+                    .ok_or_else(|| game::GameError::State("planetx_user_tokens_missing".into()))?;
+                let mut edited_tokens = tokens.clone();
+
+                if let Some(token) = edited_tokens
+                    .iter_mut()
+                    .find(|t| t.is_ready_published(&dp.sector_type))
+                {
+                    token.set_published(dp.index);
+                } else if let Some(token) = edited_tokens
+                    .iter_mut()
+                    .find(|t| !t.placed && t.r#type == dp.sector_type)
+                {
+                    token.set_to_be_placed().set_published(dp.index);
+                } else {
+                    return Err(game::GameError::Invalid("planetx_token_not_enough".into()));
+                }
+
+                if !state.revealed_sector_indexes.contains(&dp.index) {
+                    state.revealed_sector_indexes.push(dp.index);
+                }
+                *tokens = edited_tokens;
+
+                OperationResult::DoPublish((dp.index, dp.sector_type.clone()))
             }
         };
 
@@ -210,6 +256,13 @@ impl Game for PlanetXGame {
         s.turn_order = s.players.clone();
         s.turn_order.sort();
         s.turn_index = 0;
+        s.user_tokens = s
+            .turn_order
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.clone(), s.map_type.generate_tokens(id.clone(), i + 1)))
+            .collect();
+        s.revealed_sector_indexes.clear();
         s.choice_filters = s
             .turn_order
             .iter()

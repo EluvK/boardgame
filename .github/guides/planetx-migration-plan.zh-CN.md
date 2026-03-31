@@ -237,8 +237,8 @@ flutter analyze
 - [x] 关键组件迁移完成（首批：状态面板 + 星区渲染 + 操作日志 + 基础操作栏）
 - [x] 页面结构已与旧 `game.dart` 同构（RoomInfos/MessageBar/GameResult/OpBar + StarMap/Logs）
 - [x] 组件拆分首轮完成（`planetx_sections.dart` + `planetx_star_map.dart` + `planetx_op_bar.dart` + `planetx_logs.dart`）
-- [x] 交互闭环完成（MVP：sync/recommend/survey/target/research）
-- [ ] 重连恢复可用
+- [x] 交互闭环完成（已覆盖：sync/recommend/survey/target/research/locate/ready_publish/do_publish）
+- [x] 重连恢复可用（页面重进可恢复标记与关键视图状态）
 
 ---
 
@@ -539,13 +539,13 @@ cargo run -p bg_runtime
 
 ### 11.1 高优先级（功能完整性）
 
-- [ ] 补全操作交互：`locate` / `ready publish` / `do publish` 的前端输入与触发按钮。
-- [ ] 重连恢复：页面重进后恢复标记缓冲（`_sectorMarks`）与关键视图状态（会议视图开关等）。
+- [x] 补全操作交互：`locate` / `ready publish` / `do publish` 的前端输入与触发按钮。
+- [x] 重连恢复：页面重进后恢复标记缓冲（`_sectorMarks`）与关键视图状态（会议视图开关等）。
 
 ### 11.2 中优先级（体验与可维护性）
 
 - [ ] 日志面板增强：区分结构化字段（时间、操作者、动作类型），避免仅展示原始 JSON 行。
-- [ ] StarMap 组件继续贴近旧版行为：补齐更多标注语义与视觉细节。
+- [x] StarMap 组件继续贴近旧版行为：已补齐首批细节（中心旋转、图例语义、旋转状态恢复）。
 
 ### 11.3 低优先级（收尾）
 

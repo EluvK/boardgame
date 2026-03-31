@@ -118,6 +118,40 @@ class PlanetXClient {
     );
   }
 
+  Future<void> sendReadyPublish({
+    required String room,
+    required String userId,
+    required List<String> sectors,
+  }) {
+    return _sendOperation(
+      room: room,
+      userId: userId,
+      op: {
+        'ready_publish': {
+          'sectors': sectors,
+        },
+      },
+    );
+  }
+
+  Future<void> sendDoPublish({
+    required String room,
+    required String userId,
+    required int index,
+    required String sectorType,
+  }) {
+    return _sendOperation(
+      room: room,
+      userId: userId,
+      op: {
+        'do_publish': {
+          'index': index,
+          'sector_type': sectorType,
+        },
+      },
+    );
+  }
+
   Future<void> _sendOperation({
     required String room,
     required String userId,

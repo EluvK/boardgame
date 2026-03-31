@@ -24,6 +24,8 @@ class PlanetXStarMap extends StatelessWidget {
     required this.sectorMarks,
     required this.tokensCount,
     required this.othersCount,
+    required this.rotationDegrees,
+    required this.onRotateCenter,
   });
 
   final List<String> sectors;
@@ -47,6 +49,8 @@ class PlanetXStarMap extends StatelessWidget {
 
   final int tokensCount;
   final int othersCount;
+  final double rotationDegrees;
+  final VoidCallback onRotateCenter;
 
   @override
   Widget build(BuildContext context) {
@@ -109,6 +113,12 @@ class PlanetXStarMap extends StatelessWidget {
             bottom: 8,
             child: _recommendBar(),
           ),
+          if (!showMeetingView)
+            Positioned(
+              right: 42,
+              bottom: 6,
+              child: _legend(context),
+            ),
           if (!showMeetingView)
             Positioned(
               left: 6,
@@ -236,7 +246,7 @@ class PlanetXStarMap extends StatelessWidget {
                 ),
                 for (int s = 0; s < count; s++)
                   ...List.generate(6, (slot) {
-                    final centerDegree = each * s + each / 2;
+                    final centerDegree = each * s + each / 2 + rotationDegrees;
                     final radians = centerDegree * math.pi / 180;
                     final buttonRadius = baseRadius + (radius - baseRadius) * (slot + 1) / 6.6;
                     final x = buttonRadius * math.cos(radians);
@@ -260,7 +270,7 @@ class PlanetXStarMap extends StatelessWidget {
                   }),
                 for (int s = 0; s < count; s++)
                   Builder(builder: (context) {
-                    final centerDegree = each * s + each / 2;
+                    final centerDegree = each * s + each / 2 + rotationDegrees;
                     final radians = centerDegree * math.pi / 180;
                     final x = (radius + 10) * math.cos(radians);
                     final y = (radius + 10) * math.sin(radians);
@@ -270,17 +280,20 @@ class PlanetXStarMap extends StatelessWidget {
                       child: Text('${s + 1}', style: const TextStyle(fontSize: 11)),
                     );
                   }),
-                Container(
-                  width: 64,
-                  height: 64,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF607D8B),
-                    shape: BoxShape.circle,
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    '${count}S',
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                GestureDetector(
+                  onTap: onRotateCenter,
+                  child: Container(
+                    width: 64,
+                    height: 64,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF607D8B),
+                      shape: BoxShape.circle,
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      '${count}S',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                    ),
                   ),
                 ),
               ],
@@ -320,7 +333,7 @@ class PlanetXStarMap extends StatelessWidget {
                   ),
                 for (int s = 0; s < sectors.length; s++)
                   Builder(builder: (context) {
-                    final centerDegree = each * s + each / 2;
+                    final centerDegree = each * s + each / 2 + rotationDegrees;
                     final radians = centerDegree * math.pi / 180;
                     final x = radius * math.cos(radians);
                     final y = radius * math.sin(radians);
@@ -343,17 +356,20 @@ class PlanetXStarMap extends StatelessWidget {
                       ),
                     );
                   }),
-                Container(
-                  width: 70,
-                  height: 70,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF455A64),
-                    shape: BoxShape.circle,
-                  ),
-                  alignment: Alignment.center,
-                  child: const Text(
-                    'Meeting',
-                    style: TextStyle(color: Colors.white, fontSize: 12),
+                GestureDetector(
+                  onTap: onRotateCenter,
+                  child: Container(
+                    width: 70,
+                    height: 70,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF455A64),
+                      shape: BoxShape.circle,
+                    ),
+                    alignment: Alignment.center,
+                    child: const Text(
+                      'Meeting',
+                      style: TextStyle(color: Colors.white, fontSize: 12),
+                    ),
                   ),
                 ),
               ],
@@ -405,6 +421,36 @@ class PlanetXStarMap extends StatelessWidget {
               style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
             )
           : const SizedBox.shrink(),
+    );
+  }
+
+  Widget _legend(BuildContext context) {
+    final items = const ['comet', 'asteroid', 'dwarf_planet', 'nebula', 'x'];
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface.withAlpha(220),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+      ),
+      child: Wrap(
+        spacing: 6,
+        children: [
+          for (final item in items)
+            Tooltip(
+              message: _sectorShortLabel(item),
+              child: Container(
+                width: 14,
+                height: 14,
+                decoration: BoxDecoration(
+                  color: _sectorColor(item),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.black26, width: 0.5),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
