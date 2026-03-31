@@ -3,6 +3,7 @@ use std::sync::Arc;
 use acquire_plugin::AcquireGame;
 use boardgames_server::room::RoomManager;
 use boardgames_server::server::{run_server, ServerConfig};
+use planetx_plugin::PlanetXGame;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -14,6 +15,9 @@ async fn main() -> anyhow::Result<()> {
     let acquire_game = Arc::new(AcquireGame::new());
     rm.register_game(acquire_game).await;
     let acquire_game_id = "acquire".to_string();
+
+    let planetx_game = Arc::new(PlanetXGame::new());
+    rm.register_game(planetx_game).await;
 
     // Optional demo room for quick local smoke testing.
     let _ = rm
