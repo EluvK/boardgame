@@ -1,5 +1,21 @@
 import 'package:flutter/material.dart';
 
+class PlanetXLogEntry {
+  const PlanetXLogEntry({
+    required this.time,
+    required this.type,
+    required this.actor,
+    required this.summary,
+    required this.raw,
+  });
+
+  final DateTime time;
+  final String type;
+  final String actor;
+  final String summary;
+  final String raw;
+}
+
 class PlanetXLogsPanel extends StatelessWidget {
   const PlanetXLogsPanel({
     super.key,
@@ -8,9 +24,9 @@ class PlanetXLogsPanel extends StatelessWidget {
     required this.meetingLog,
   });
 
-  final List<String> opLog;
-  final List<String> clueLog;
-  final List<String> meetingLog;
+  final List<PlanetXLogEntry> opLog;
+  final List<PlanetXLogEntry> clueLog;
+  final List<PlanetXLogEntry> meetingLog;
 
   @override
   Widget build(BuildContext context) {
@@ -34,7 +50,7 @@ class PlanetXLogTable extends StatelessWidget {
   });
 
   final String title;
-  final List<String> rows;
+  final List<PlanetXLogEntry> rows;
 
   @override
   Widget build(BuildContext context) {
@@ -49,14 +65,72 @@ class PlanetXLogTable extends StatelessWidget {
           ),
           child: Table(
             border: TableBorder.all(),
+            columnWidths: const {
+              0: FlexColumnWidth(1.2),
+              1: FlexColumnWidth(1.2),
+              2: FlexColumnWidth(1.2),
+              3: FlexColumnWidth(4),
+            },
             children: [
-              TableRow(children: [_tableCell(const Text('entry'))]),
-              for (final row in rows.take(12)) TableRow(children: [_tableCell(Text(row))]),
+              TableRow(
+                children: [
+                  _tableCell(const Text('time', style: TextStyle(fontWeight: FontWeight.bold))),
+                  _tableCell(const Text('type', style: TextStyle(fontWeight: FontWeight.bold))),
+                  _tableCell(const Text('actor', style: TextStyle(fontWeight: FontWeight.bold))),
+                  _tableCell(const Text('summary', style: TextStyle(fontWeight: FontWeight.bold))),
+                ],
+              ),
+              for (final row in rows.take(12)) _entryRow(context, row),
             ],
           ),
         ),
         const SizedBox(height: 4),
       ],
+    );
+  }
+
+  TableRow _entryRow(BuildContext context, PlanetXLogEntry row) {
+    return TableRow(
+      children: [
+        _tableCell(Text(_formatTime(row.time))),
+        _tableCell(Text(row.type)),
+        _tableCell(Text(row.actor.isEmpty ? '-' : row.actor)),
+        InkWell(
+          onTap: () => _showRaw(context, row),
+          child: _tableCell(
+            Text(
+              row.summary,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _formatTime(DateTime dt) {
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final mm = dt.minute.toString().padLeft(2, '0');
+    final ss = dt.second.toString().padLeft(2, '0');
+    return '$hh:$mm:$ss';
+  }
+
+  void _showRaw(BuildContext context, PlanetXLogEntry row) {
+    showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text('${row.type} raw'),
+          content: SingleChildScrollView(child: Text(row.raw)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
     );
   }
 

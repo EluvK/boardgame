@@ -34,16 +34,23 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
   late final PlanetXClient _client;
 
   PlanetXStateEnvelope? _latestState;
-  final List<String> _logs = [];
+  final List<PlanetXLogEntry> _logs = [];
   bool _busy = false;
+  bool _settingReady = false;
+  bool _isReady = false;
+  bool _roomStarted = false;
+  int _readyCount = 0;
+  int _playerCount = 0;
+  int _minPlayers = 2;
+  List<String> _readyUsers = const [];
   String? _error;
   bool _showMeetingView = false;
   double _mapRotationDegrees = 0;
   int _recommendCount = 0;
   bool _canLocate = false;
-  final List<String> _opLog = [];
-  final List<String> _clueLog = [];
-  final List<String> _meetingLog = [];
+  final List<PlanetXLogEntry> _opLog = [];
+  final List<PlanetXLogEntry> _clueLog = [];
+  final List<PlanetXLogEntry> _meetingLog = [];
   String _latestHint = '';
 
   _SectorMarkMode _markMode = _SectorMarkMode.confirm;
@@ -90,15 +97,66 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     final type = payload['type']?.toString() ?? '';
     final game = payload['game']?.toString() ?? '';
 
+    if (type == 'ready_state') {
+      final readyStateRaw = payload['ready_state'];
+      if (readyStateRaw is Map) {
+        final prevStarted = _roomStarted;
+        setState(() {
+          _applyReadyPayload(_asMap(readyStateRaw));
+          _appendLimited(
+            _meetingLog,
+            PlanetXLogEntry(
+              time: DateTime.now(),
+              type: 'ready',
+              actor: payload['user']?.toString() ?? '',
+              summary: 'ready=$_readyCount/$_playerCount',
+              raw: jsonEncode(payload),
+            ),
+          );
+        });
+
+        // If room just entered started state, force a sync to avoid stale UI.
+        if (!prevStarted && _roomStarted) {
+          _run(
+            () => _client.sync(
+              room: widget.session.roomId,
+              userId: widget.session.userId,
+            ),
+            'auto_sync_after_ready',
+          );
+        }
+      }
+      return;
+    }
+
     if (type == 'state' && game == 'planetx') {
       setState(() {
         _latestState = PlanetXStateEnvelope.fromJson(payload);
+        _roomStarted = _latestState?.state['started'] == true;
         _ensureMarkBuffer();
         _latestHint = _latestState?.event ?? '';
         if (_latestHint.isNotEmpty) {
-          _appendLimited(_meetingLog, _latestHint);
+          _appendLimited(
+            _meetingLog,
+            PlanetXLogEntry(
+              time: DateTime.now(),
+              type: 'state',
+              actor: payload['by']?.toString() ?? '',
+              summary: _latestHint,
+              raw: jsonEncode(payload),
+            ),
+          );
         }
-        _logs.insert(0, 'state:${_latestState?.event ?? ''}');
+        _appendLimited(
+          _logs,
+          PlanetXLogEntry(
+            time: DateTime.now(),
+            type: 'state',
+            actor: payload['by']?.toString() ?? '',
+            summary: _latestState?.event ?? '',
+            raw: jsonEncode(payload),
+          ),
+        );
         if (_logs.length > 30) {
           _logs.removeLast();
         }
@@ -122,16 +180,52 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
           if (result.containsKey('can_locate')) {
             _canLocate = result['can_locate'] == true;
           }
-          _appendLimited(_clueLog, 'recommend: ${jsonEncode(result)}');
+          _appendLimited(
+            _clueLog,
+            PlanetXLogEntry(
+              time: DateTime.now(),
+              type: 'recommend',
+              actor: payload['by']?.toString() ?? widget.session.userId,
+              summary: 'count=${result['count'] ?? '-'} can_locate=${result['can_locate'] ?? '-'}',
+              raw: jsonEncode(payload),
+            ),
+          );
         }
         if (type == 'planetx_op_result') {
           final result = _asMap(payload['result']);
-          _appendLimited(_opLog, jsonEncode(result));
+          _appendLimited(
+            _opLog,
+            PlanetXLogEntry(
+              time: DateTime.now(),
+              type: 'op',
+              actor: payload['by']?.toString() ?? widget.session.userId,
+              summary: _summarizeOperationResult(result),
+              raw: jsonEncode(payload),
+            ),
+          );
           if (result.containsKey('research')) {
-            _appendLimited(_clueLog, jsonEncode(result['research']));
+            _appendLimited(
+              _clueLog,
+              PlanetXLogEntry(
+                time: DateTime.now(),
+                type: 'research',
+                actor: payload['by']?.toString() ?? widget.session.userId,
+                summary: 'research clue updated',
+                raw: jsonEncode(result['research']),
+              ),
+            );
           }
         }
-        _logs.insert(0, '$type ${jsonEncode(payload)}');
+        _appendLimited(
+          _logs,
+          PlanetXLogEntry(
+            time: DateTime.now(),
+            type: type,
+            actor: payload['by']?.toString() ?? '',
+            summary: _summarizeMessage(type, payload),
+            raw: jsonEncode(payload),
+          ),
+        );
         if (_logs.length > 30) {
           _logs.removeLast();
         }
@@ -155,7 +249,16 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
         return;
       }
       setState(() {
-        _logs.insert(0, 'action:$label ok');
+        _appendLimited(
+          _logs,
+          PlanetXLogEntry(
+            time: DateTime.now(),
+            type: 'action',
+            actor: widget.session.userId,
+            summary: '$label ok',
+            raw: label,
+          ),
+        );
       });
     } catch (e) {
       if (!mounted) {
@@ -163,7 +266,16 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
       }
       setState(() {
         _error = e.toString();
-        _logs.insert(0, 'action:$label fail $e');
+        _appendLimited(
+          _logs,
+          PlanetXLogEntry(
+            time: DateTime.now(),
+            type: 'action',
+            actor: widget.session.userId,
+            summary: '$label fail',
+            raw: e.toString(),
+          ),
+        );
       });
     } finally {
       if (mounted) {
@@ -175,6 +287,53 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
         });
       }
     }
+  }
+
+  Future<void> _setReady(bool ready) async {
+    if (_busy || _settingReady || _roomStarted) {
+      return;
+    }
+
+    setState(() {
+      _settingReady = true;
+      _error = null;
+    });
+
+    try {
+      await widget.session.api.setReady(roomId: widget.session.roomId, ready: ready);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _isReady = ready;
+      });
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _error = e.toString();
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _settingReady = false;
+        });
+      }
+    }
+  }
+
+  void _applyReadyPayload(Map<String, dynamic> readyState) {
+    final users = readyState['ready_users'];
+    final readyUsers = users is List ? users.map((e) => e.toString()).toList() : <String>[];
+    readyUsers.sort();
+
+    _readyUsers = readyUsers;
+    _readyCount = _asInt(readyState['ready_count']);
+    _playerCount = _asInt(readyState['player_count']);
+    _minPlayers = _asInt(readyState['min_players']);
+    _roomStarted = readyState['started'] == true;
+    _isReady = _readyUsers.contains(widget.session.userId);
   }
 
   @override
@@ -214,6 +373,10 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
                 hint: _latestHint,
                 error: _error,
               ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: _buildReadyBar(),
             ),
             PlanetXGameResult(stateMap: stateMap),
             Padding(
@@ -457,11 +620,93 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     return players.length > 1 ? players.length - 1 : 0;
   }
 
-  void _appendLimited(List<String> target, String value) {
+  void _appendLimited(List<PlanetXLogEntry> target, PlanetXLogEntry value) {
     target.insert(0, value);
     if (target.length > 40) {
       target.removeRange(40, target.length);
     }
+  }
+
+  String _summarizeOperationResult(Map<String, dynamic> result) {
+    if (result.containsKey('survey')) {
+      return 'survey=${result['survey']}';
+    }
+    if (result.containsKey('target')) {
+      return 'target=${result['target']}';
+    }
+    if (result.containsKey('research')) {
+      return 'research';
+    }
+    if (result.containsKey('locate')) {
+      return 'locate=${result['locate']}';
+    }
+    if (result.containsKey('ready_publish')) {
+      return 'ready_publish=${result['ready_publish']}';
+    }
+    if (result.containsKey('do_publish')) {
+      return 'do_publish';
+    }
+    return 'operation';
+  }
+
+  String _summarizeMessage(String type, Map<String, dynamic> payload) {
+    if (type == 'planetx_op_result') {
+      final result = _asMap(payload['result']);
+      return _summarizeOperationResult(result);
+    }
+    if (type == 'planetx_recommend_result') {
+      final result = _asMap(payload['result']);
+      return 'recommend ${result.keys.join('/')}';
+    }
+    return type;
+  }
+
+  Widget _buildReadyBar() {
+    final waitingReady = !_roomStarted;
+    final readyText = 'ready $_readyCount/${_playerCount == 0 ? '-' : _playerCount} (min $_minPlayers)';
+    final readyUsersText = _readyUsers.isEmpty ? '-' : _readyUsers.join(', ');
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        color: waitingReady ? const Color(0xFFFFF5E6) : const Color(0xFFEAF7EF),
+        border: Border.all(
+          color: waitingReady ? const Color(0xFFB26A00) : const Color(0xFF1E7D39),
+          width: 0.5,
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  waitingReady ? 'WAIT_READY' : 'STARTED',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: waitingReady ? const Color(0xFFB26A00) : const Color(0xFF1E7D39),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(readyText, style: const TextStyle(fontSize: 12)),
+                const SizedBox(height: 2),
+                Text('users: $readyUsersText', style: const TextStyle(fontSize: 12)),
+              ],
+            ),
+          ),
+          OutlinedButton(
+            onPressed: _busy || _settingReady || _roomStarted ? null : () => _setReady(!_isReady),
+            child: Text(
+              _roomStarted
+                  ? 'Game Started'
+                  : (_settingReady ? 'Updating...' : (_isReady ? 'Cancel Ready' : 'Ready')),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   List<String> _publishableTypes(Map<String, dynamic> stateMap) {

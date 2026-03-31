@@ -54,6 +54,8 @@ class PlanetXStarMap extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final displaySectors = sectors.isEmpty ? List<String>.filled(12, 'space') : sectors;
+
     return Container(
       decoration: BoxDecoration(
         border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
@@ -88,7 +90,9 @@ class PlanetXStarMap extends StatelessWidget {
                         },
                       );
                     },
-                    child: showMeetingView ? _buildMeetingMapView() : _buildStarMapView(),
+                    child: showMeetingView
+                        ? _buildMeetingMapView(displaySectors)
+                        : _buildStarMapView(displaySectors),
                   ),
                 ),
               ),
@@ -216,11 +220,8 @@ class PlanetXStarMap extends StatelessWidget {
     );
   }
 
-  Widget _buildStarMapView() {
-    final count = sectors.length;
-    if (count == 0) {
-      return const Center(child: Text('Waiting map data...'));
-    }
+  Widget _buildStarMapView(List<String> displaySectors) {
+    final count = displaySectors.length;
 
     return LayoutBuilder(
       key: const ValueKey('star_view'),
@@ -237,6 +238,28 @@ class PlanetXStarMap extends StatelessWidget {
             child: Stack(
               alignment: Alignment.center,
               children: [
+                  Container(
+                    width: size,
+                    height: size,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: RadialGradient(
+                        colors: [
+                          Colors.white,
+                          Colors.blueGrey.withAlpha(18),
+                        ],
+                        stops: const [0.18, 1.0],
+                      ),
+                    ),
+                  ),
+                  for (int ring = 1; ring <= 6; ring++)
+                    CustomPaint(
+                      size: Size(size, size),
+                      painter: _CircleBorderPainter(
+                        radius: baseRadius + (radius - baseRadius) * ring / 6.4,
+                        color: Colors.grey.withAlpha(70),
+                      ),
+                    ),
                 CustomPaint(
                   size: Size(size, size),
                   painter: _SectorBorderPainter(
@@ -261,15 +284,16 @@ class PlanetXStarMap extends StatelessWidget {
                       child: GestureDetector(
                         onTap: () => onMarkTap(s, slot),
                         child: _markSlot(
-                          sectorType: sectors[s],
+                          sectorType: displaySectors[s],
                           mark: mark,
                           showType: slot == 0,
+                          emphasized: slot == 0,
                         ),
                       ),
                     );
                   }),
                 for (int s = 0; s < count; s++)
-                  Builder(builder: (context) {
+                  () {
                     final centerDegree = each * s + each / 2 + rotationDegrees;
                     final radians = centerDegree * math.pi / 180;
                     final x = (radius + 10) * math.cos(radians);
@@ -279,7 +303,7 @@ class PlanetXStarMap extends StatelessWidget {
                       top: size / 2 + y - 8,
                       child: Text('${s + 1}', style: const TextStyle(fontSize: 11)),
                     );
-                  }),
+                  }(),
                 GestureDetector(
                   onTap: onRotateCenter,
                   child: Container(
@@ -290,10 +314,29 @@ class PlanetXStarMap extends StatelessWidget {
                       shape: BoxShape.circle,
                     ),
                     alignment: Alignment.center,
-                    child: Text(
-                      '${count}S',
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.autorenew_rounded, color: Colors.white, size: 16),
+                        Text(
+                          '${count}S',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                        ),
+                      ],
                     ),
+                  ),
+                ),
+                Positioned(
+                  top: 8,
+                  child: Row(
+                    children: [
+                      const Icon(Icons.navigation, size: 12, color: Colors.black54),
+                      const SizedBox(width: 4),
+                      Text(
+                        'rot ${rotationDegrees.toStringAsFixed(0)}°',
+                        style: const TextStyle(fontSize: 11, color: Colors.black54),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -304,17 +347,13 @@ class PlanetXStarMap extends StatelessWidget {
     );
   }
 
-  Widget _buildMeetingMapView() {
-    if (sectors.isEmpty) {
-      return const Center(child: Text('Waiting map data...'));
-    }
-
+  Widget _buildMeetingMapView(List<String> displaySectors) {
     return LayoutBuilder(
       key: const ValueKey('meeting_view'),
       builder: (context, constraints) {
         final size = math.max(300.0, math.min(constraints.maxWidth, constraints.maxHeight));
         final radius = (size - 30) / 2;
-        final each = 360.0 / sectors.length;
+        final each = 360.0 / displaySectors.length;
 
         return Center(
           child: SizedBox(
@@ -323,6 +362,20 @@ class PlanetXStarMap extends StatelessWidget {
             child: Stack(
               alignment: Alignment.center,
               children: [
+                Container(
+                  width: size,
+                  height: size,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [
+                        Colors.white,
+                        Colors.blueGrey.withAlpha(15),
+                      ],
+                      stops: const [0.2, 1.0],
+                    ),
+                  ),
+                ),
                 for (int ring = 1; ring <= 4; ring++)
                   CustomPaint(
                     size: Size(size, size),
@@ -331,7 +384,26 @@ class PlanetXStarMap extends StatelessWidget {
                       color: Colors.grey.withAlpha(80),
                     ),
                   ),
-                for (int s = 0; s < sectors.length; s++)
+                CustomPaint(
+                  size: Size(size, size),
+                  painter: _SectorBorderPainter(
+                    sectorCount: displaySectors.length,
+                    radius: radius,
+                  ),
+                ),
+                ..._buildMeetingTokenDots(
+                  size: size,
+                  count: tokensCount,
+                  ringRadius: radius * 0.38,
+                  color: Colors.teal,
+                ),
+                ..._buildMeetingTokenDots(
+                  size: size,
+                  count: othersCount,
+                  ringRadius: radius * 0.52,
+                  color: Colors.indigo,
+                ),
+                for (int s = 0; s < displaySectors.length; s++)
                   Builder(builder: (context) {
                     final centerDegree = each * s + each / 2 + rotationDegrees;
                     final radians = centerDegree * math.pi / 180;
@@ -344,7 +416,7 @@ class PlanetXStarMap extends StatelessWidget {
                         width: 24,
                         height: 24,
                         decoration: BoxDecoration(
-                          color: _sectorColor(sectors[s]).withAlpha(190),
+                            color: _sectorColor(displaySectors[s]).withAlpha(190),
                           shape: BoxShape.circle,
                           border: Border.all(color: Colors.black12),
                         ),
@@ -372,12 +444,51 @@ class PlanetXStarMap extends StatelessWidget {
                     ),
                   ),
                 ),
+                Positioned(
+                  top: 8,
+                  child: Text(
+                    'season ${rotationDegrees.toStringAsFixed(0)}°',
+                    style: const TextStyle(fontSize: 11, color: Colors.black54),
+                  ),
+                ),
               ],
             ),
           ),
         );
       },
     );
+  }
+
+  List<Widget> _buildMeetingTokenDots({
+    required double size,
+    required int count,
+    required double ringRadius,
+    required Color color,
+  }) {
+    if (count <= 0) {
+      return const <Widget>[];
+    }
+
+    final each = 360.0 / count;
+    return List<Widget>.generate(count, (i) {
+      final degree = i * each + rotationDegrees;
+      final rad = degree * math.pi / 180;
+      final x = ringRadius * math.cos(rad);
+      final y = ringRadius * math.sin(rad);
+      return Positioned(
+        left: size / 2 + x - 5,
+        top: size / 2 + y - 5,
+        child: Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: color.withAlpha(190),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 1),
+          ),
+        ),
+      );
+    });
   }
 
   Widget _counterChip(BuildContext context, String label, int value) {
@@ -395,32 +506,46 @@ class PlanetXStarMap extends StatelessWidget {
     required String sectorType,
     required int mark,
     required bool showType,
+    required bool emphasized,
   }) {
     final borderColor = switch (mark) {
       1 => Colors.green,
       2 => Colors.blue,
       _ => Colors.transparent,
     };
-    final tint = switch (mark) {
-      2 => Colors.black.withAlpha(35),
-      _ => Colors.transparent,
+
+    final bg = switch (mark) {
+      1 => Colors.green.withAlpha(32),
+      2 => Colors.blue.withAlpha(28),
+      _ => _sectorColor(sectorType).withAlpha(emphasized ? 160 : 85),
     };
 
     return Container(
       width: 28,
       height: 28,
       decoration: BoxDecoration(
-        color: tint,
+        color: bg,
         shape: BoxShape.circle,
         border: Border.all(color: borderColor, width: 1.4),
       ),
       alignment: Alignment.center,
       child: showType
-          ? Text(
-              _sectorShortLabel(sectorType).substring(0, 1),
-              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+          ? Padding(
+              padding: const EdgeInsets.all(4),
+              child: Image.asset(
+                _sectorAssetPath(sectorType),
+                fit: BoxFit.contain,
+                errorBuilder: (context, error, stackTrace) => Text(
+                  _sectorShortLabel(sectorType).substring(0, 1),
+                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+                ),
+              ),
             )
-          : const SizedBox.shrink(),
+          : (mark == 1
+                ? const Icon(Icons.check, size: 13, color: Colors.green)
+                : mark == 2
+                ? const Icon(Icons.close, size: 13, color: Colors.blue)
+                : const SizedBox.shrink()),
     );
   }
 
@@ -440,12 +565,23 @@ class PlanetXStarMap extends StatelessWidget {
             Tooltip(
               message: _sectorShortLabel(item),
               child: Container(
-                width: 14,
-                height: 14,
+                width: 16,
+                height: 16,
                 decoration: BoxDecoration(
-                  color: _sectorColor(item),
                   shape: BoxShape.circle,
                   border: Border.all(color: Colors.black26, width: 0.5),
+                  color: Colors.white,
+                ),
+                padding: const EdgeInsets.all(2),
+                child: Image.asset(
+                  _sectorAssetPath(item),
+                  fit: BoxFit.contain,
+                  errorBuilder: (context, error, stackTrace) => Container(
+                    decoration: BoxDecoration(
+                      color: _sectorColor(item),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -487,6 +623,24 @@ class PlanetXStarMap extends StatelessWidget {
       case 'space':
       default:
         return 'Space';
+    }
+  }
+
+  String _sectorAssetPath(String sector) {
+    switch (sector) {
+      case 'comet':
+        return 'assets/icons/comet.png';
+      case 'asteroid':
+        return 'assets/icons/asteroid.png';
+      case 'dwarf_planet':
+        return 'assets/icons/dwarf_planet.png';
+      case 'nebula':
+        return 'assets/icons/nebula.png';
+      case 'x':
+        return 'assets/icons/x.png';
+      case 'space':
+      default:
+        return 'assets/icons/bracket.png';
     }
   }
 }

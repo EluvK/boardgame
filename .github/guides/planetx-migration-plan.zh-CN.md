@@ -297,12 +297,13 @@ flutter analyze
 
 ---
 
-## 6. 开工前检查清单
+## 6. 当前阶段检查清单（M6）
 
-- [ ] 当前分支可编译（`cargo check --workspace` + `flutter analyze`）
-- [ ] Acquire 当前流程可手工走通
-- [ ] 明确 `planetx` game_id 不变
-- [ ] 明确第一阶段只做后端，不做 UI 重构
+- [ ] 基础检查通过：`cargo check --workspace` + `flutter analyze`
+- [ ] PlanetX 插件测试通过：`cargo test -p planetx_plugin`
+- [ ] Acquire 手工 smoke 完成（建房、ready、开局、操作）
+- [ ] PlanetX 手工 smoke 完成（含 survey/target/research/locate/publish）
+- [ ] 双房并发验证完成（Acquire 与 PlanetX 同时在线）
 
 ---
 
@@ -318,241 +319,83 @@ flutter analyze
 
 ---
 
-## 8. M1 执行清单（可直接照做）
+## 8. 当前状态快照（精简）
 
-本节用于第一阶段落地：只完成 PlanetX 插件壳接入与运行时注册，不迁移具体规则。
+### 8.1 已完成（不再展开历史细节）
 
-### 8.1 目标
+- M1~M5 主体已完成。
+- 已具备：插件接入、规则迁移、统一协议、前端路由与页面、核心交互闭环。
+- 已覆盖操作：`sync / recommend / survey / target / research / locate / ready_publish / do_publish`。
+- 已完成首版恢复：页面重进后可恢复关键 UI 状态（标记与视图开关）。
 
-- 服务端能注册并识别 `planetx` 游戏。
-- 大厅 `list_games` 可返回 `planetx`。
-- 不要求此阶段可完整开局。
+### 8.2 仍未完成（需继续执行）
 
-### 8.2 文件改动清单
-
-1. 根工作区
-- `Cargo.toml`
-   - 在 `workspace.members` 追加 `planetx_plugin`。
-
-2. 新建插件目录
-- `planetx_plugin/Cargo.toml`
-   - 声明 crate 名称、edition、依赖（建议与 `acquire_plugin` 同级最小依赖）。
-- `planetx_plugin/src/lib.rs`
-   - 提供 `PlanetXGame` 结构体。
-   - 实现最小 `Game` trait（descriptor + create_initial_state + handle_action）。
-- `planetx_plugin/src/model.rs`
-   - 提供最小状态结构并实现 `GameState`（snapshot/restore 可先用 JSON）。
-
-3. 运行时注册
-- `bg_runtime/src/main.rs`
-   - 引入 `planetx_plugin::PlanetXGame`。
-   - 在 `RoomManager` 注册 `planetx`。
-
-### 8.3 建议提交顺序
-
-1. 提交 A：`chore(rust): add planetx_plugin crate skeleton`
-   - 新建 `planetx_plugin` 目录与最小代码。
-
-2. 提交 B：`chore(workspace): include planetx_plugin member`
-   - 修改根 `Cargo.toml`。
-
-3. 提交 C：`feat(runtime): register planetx game in bg_runtime`
-   - 修改 `bg_runtime/src/main.rs`。
-
-### 8.4 每步验收命令
-
-```bash
-cargo check --workspace
-```
-
-通过后启动服务端，再做最小联调：
-
-```bash
-cargo run -p bg_runtime
-```
-
-前端进入大厅后检查游戏列表是否出现 `planetx`。
-
-### 8.5 M1 完成判定
-
-- [x] `cargo check --workspace` 通过
-- [ ] 服务可启动
-- [ ] `list_games` 返回包含 `planetx`
-- [ ] Acquire 仍可创建房间（无回归）
-
-### 8.6 M1 常见问题
-
-1. 编译报 trait 未实现
-- 检查 `PlanetXGame` 是否完整实现了 `Game` trait 所需方法。
-
-2. `list_games` 没有 planetx
-- 检查 `bg_runtime/src/main.rs` 是否调用 `rm.register_game(...)`。
-- 检查 `descriptor().id` 是否为 `planetx`。
-
-3. 启动后创建房间失败
-- 检查创建房间时传入 game_id 是否为 `planetx`（区分大小写）。
+- [x] 日志面板结构化展示（已支持字段化展示与 raw 展开）。
+- [ ] M6 双游戏回归（Acquire + PlanetX 并发 smoke test）。
+- [ ] 文档收尾：补充前端 payload 示例与错误处理示例。
 
 ---
 
-## 9. M2 文件级迁移映射（ref -> planetx_plugin）
+## 9. 后续执行步骤（按优先级）
 
-本节用于第二阶段：将旧服务端领域逻辑迁移到新插件，同时避免把旧 socket 绑定代码带入。
+### Step 1: 日志结构化增强（中优先级）
 
-## 9.1 建议目标目录
+目标：把 `OpLog / ClueLog / MeetingLog` 从纯文本改为字段化展示，保留原始文本兜底。
 
-建议在 `planetx_plugin/src` 使用如下结构：
+执行项：
 
-- `lib.rs`
-- `model.rs`
-- `engine.rs`
-- `map/`
-- `operation/`
-- `recommendation/`
-- `tests.rs`
+1. 在前端定义日志行模型（时间、操作者、操作类型、摘要、原始 payload）。
+2. 在消息监听处按 `planetx_op_result / planetx_recommend_result / state.event` 解析并入库。
+3. 更新日志组件为表格列展示（类型、操作者、摘要、时间），点击可展开 raw。
 
-## 9.2 映射总表
+验收：
 
-| 参考文件 | 目标文件 | 处理方式 | 说明 |
-|---|---|---|---|
-| `ref/planetx_server/src/map/*` | `planetx_plugin/src/map/*` | 直接迁移为主 | 纯规则层，可复用率高 |
-| `ref/planetx_server/src/operation/*` | `planetx_plugin/src/operation/*` | 迁移后改错误类型 | 统一映射到 `GameError` |
-| `ref/planetx_server/src/recommendation/*` | `planetx_plugin/src/recommendation/*` | 直接迁移为主 | 与 socket 解耦后可复用 |
-| `ref/planetx_server/src/room/game_state.rs` | `planetx_plugin/src/model.rs` | 结构重组 | 保留状态字段，移除网络相关字段 |
-| `ref/planetx_server/src/server_state.rs` | 不迁移 | 重写/删除 | 这是旧服务器全局状态，不属于插件 |
-| `ref/planetx_server/src/server_handler.rs` | 不迁移 | 重写为 `engine.rs` 内 action 分发 | 旧事件处理需改为统一 `handle_action` |
-| `ref/planetx_server/src/main.rs` | 不迁移 | 删除 | 启动入口由 `bg_runtime` 统一管理 |
-| `ref/planetx_server/src/room/server_resp.rs` | `planetx_plugin/src/engine.rs` 内 message payload | 语义迁移 | 转成统一 message/broadcast 格式 |
+- `flutter analyze` 无告警。
+- UI 可清晰区分三类日志，且可查看原始 JSON。
 
-## 9.3 重点改造点
+### Step 2: M6 双游戏回归（高优先级发布前门槛）
 
-1. 事件改造
-- 旧：`socket.emit("game_state")`, `socket.emit("op_result")`。
-- 新：返回 `ActionResult::Ok { events, broadcasts }`，由框架发送。
+目标：确认 PlanetX 增量没有影响 Acquire，且双游戏并存稳定。
 
-2. 鉴权与用户查找
-- 旧：在 `server_state` 里通过 socket_id 查 user。
-- 新：直接使用 `Action.user_id`，插件不感知 socket。
+执行项：
 
-3. 房间操作语义
-- 旧：`room` 事件承载 create/join/leave/prepare。
-- 新：房间管理由上层统一处理，插件只处理“游戏内动作”。
+1. 启动服务后验证 `list_games` 同时包含 `acquire` 与 `planetx`。
+2. Acquire smoke：建房、ready、开局、至少 1 次操作。
+3. PlanetX smoke：建房、ready、开局、执行 `survey/target/research/locate/publish` 至少各 1 次。
+4. 并发验证：两个房间同时在线，互不串房/串消息。
 
-4. 错误与提示
-- 旧：`ServerResp::RoomErrors/OpErrors/...`。
-- 新：`GameError::Invalid/State/Internal/Retryable` + message payload。
+验收：
 
-## 9.4 M2 建议任务拆分
+- `cargo check --workspace` 通过。
+- `cargo test -p planetx_plugin` 通过。
+- `flutter analyze` 通过。
+- 两游戏流程均可手工走通。
 
-1. 任务 1：迁移 map + operation + recommendation
-- 验收：模块可编译，基础测试可运行。
+当前进度（2026-03-31）：
 
-2. 任务 2：重建 PlanetXState
-- 验收：`snapshot/restore` 可往返，字段完整。
+- [x] `cargo check --workspace` 已执行通过（仅现存 warning）。
+- [x] `cargo test -p planetx_plugin` 已执行通过（8 passed）。
+- [x] `flutter analyze lib test` 已执行（存在 1 条历史 info，非本次变更引入）。
+- [ ] Acquire 手工 smoke 待执行。
+- [ ] PlanetX 手工 smoke 待执行。
+- [ ] 双房并发手工验证待执行。
 
-3. 任务 3：编写 engine 的 action 分发
-- 验收：至少支持一条核心 op（如 research）闭环。
+### Step 3: 文档收尾（低优先级）
 
-4. 任务 4：补齐最小测试矩阵
-- 验收：开局、回合推进、非法操作、推荐逻辑均有测试。
+目标：让迁移文档可直接用于后续维护与排障。
 
-## 9.5 M2 完成判定
+执行项：
 
-- [x] 旧服务端规则层已迁移到 `planetx_plugin`（首批：map/operation/recommendation/model）
-- [x] 旧 socket 绑定代码未被引入插件
-- [x] `cargo test -p planetx_plugin` 通过
-- [x] 可进入 M3 协议适配阶段
+1. 在本手册增加“前端 action payload 示例”小节（至少 4 个：survey/locate/ready_publish/do_publish）。
+2. 增加“常见错误码 -> 前端提示语”对照表。
+3. 将本节执行结果回填到 M6 勾选状态。
 
 ---
 
-## 10. M3 协议字段对照表（旧事件 -> 新统一协议）
+## 10. 本轮完成定义（收口标准）
 
-本表用于实现 `planetx_plugin::handle_action` 时统一 payload 语义。
+满足以下全部条件后，将 M6 三项全部勾选：
 
-## 10.1 客户端请求映射
-
-| 旧请求事件 | 旧负载 | 新请求入口 | 新 payload 建议 |
-|---|---|---|---|
-| `op` | `Operation` | `action` | `{ "type": "planetx_op", "op": { ... } }` |
-| `recommend` | `RecommendOperation` | `action` | `{ "type": "planetx_recommend", "op": { ... } }` |
-| `sync` | 空 | `action` | `{ "type": "planetx_sync" }` |
-| `room`（旧游戏内控制） | `RoomUserOperation` | 不进入插件 | 由现有房间 API 负责（create/join/leave/set_ready） |
-
-## 10.2 服务端响应映射
-
-| 旧服务端事件 | 新建议通道 | 新 payload 建议 |
-|---|---|---|
-| `game_state` | `broadcast` | `{ "type": "state", "game": "planetx", "state": { ... } }` |
-| `op_result` | `message`（给操作者） | `{ "type": "planetx_op_result", "result": { ... } }` |
-| `recommend_result` | `message`（给操作者） | `{ "type": "planetx_recommend_result", "result": { ... } }` |
-| `game_start` | `broadcast` | `{ "type": "planetx_game_start", "state": { ... } }` |
-| `xclue` | `message`（定向） | `{ "type": "planetx_xclue", "items": [ ... ] }` |
-| `token` | `message`（定向） | `{ "type": "planetx_token", "tokens": [ ... ] }` |
-| `board_tokens` | `broadcast` | `{ "type": "planetx_board_tokens", "tokens": [ ... ] }` |
-| `server_resp.*` | `message` 或 action error | 可落在 `GameError` 或 `{ "type": "planetx_error", "code": "..." }` |
-
-## 10.3 action payload 最小规范
-
-建议统一字段：
-
-```json
-{
-   "type": "planetx_op",
-   "op": {
-      "kind": "survey",
-      "params": {
-         "sector_type": "comet",
-         "range": [1, 6]
-      }
-   }
-}
-```
-
-要求：
-
-1. `type` 必填，用于路由分发。
-2. `op.kind` 必填，用于具体规则逻辑。
-3. 参数校验失败必须返回可读错误码（建议 snake_case）。
-
-## 10.4 错误码建议
-
-| 错误码 | 含义 |
-|---|---|
-| `planetx_invalid_payload` | payload 结构非法 |
-| `planetx_unknown_action_type` | 不支持的 type |
-| `planetx_invalid_op` | 不合法操作 |
-| `planetx_not_current_player` | 非当前玩家操作 |
-| `planetx_invalid_stage` | 当前阶段不允许该操作 |
-| `planetx_state_conflict` | 状态冲突或并发冲突 |
-
-## 10.5 M3 完成判定
-
-- [x] 客户端可通过统一 `action` 发送 PlanetX 操作
-- [x] 插件可返回规范化 `broadcast/message`
-- [x] 至少 1 条核心操作链路跑通（请求 -> 状态更新 -> 反馈）
-- [x] 错误码与提示语义可稳定复现
-
----
-
-## 11. 当前会话遗留问题（已整理）
-
-本节用于承接本次 session 暂停点，确保后续继续时不丢上下文。
-
-### 11.1 高优先级（功能完整性）
-
-- [x] 补全操作交互：`locate` / `ready publish` / `do publish` 的前端输入与触发按钮。
-- [x] 重连恢复：页面重进后恢复标记缓冲（`_sectorMarks`）与关键视图状态（会议视图开关等）。
-
-### 11.2 中优先级（体验与可维护性）
-
-- [ ] 日志面板增强：区分结构化字段（时间、操作者、动作类型），避免仅展示原始 JSON 行。
-- [x] StarMap 组件继续贴近旧版行为：已补齐首批细节（中心旋转、图例语义、旋转状态恢复）。
-
-### 11.3 低优先级（收尾）
-
-- [ ] 进行 M6 双游戏回归（Acquire + PlanetX 并发 smoke test）。
-- [ ] 同步补充协议字段文档中的前端示例负载与错误处理样例。
-
-### 11.4 本次已验证
-
-- [x] `flutter analyze`（PlanetX 页面与组件相关文件）通过，无新告警。
-- [x] 组件职责边界已稳定：页面负责状态编排，组件负责呈现与交互触发。
+1. 双游戏回归完成。
+2. 文档示例与错误处理说明补齐。
+3. 可发布状态确认（无阻断问题）。
