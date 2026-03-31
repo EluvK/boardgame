@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../games/acquire/presentation/acquire_room_page.dart';
+import '../games/planetx/presentation/planetx_room_page.dart';
 import 'room_session.dart';
 import 'unsupported_game_room_page.dart';
 
@@ -17,6 +18,8 @@ class RoomGameRouter extends StatelessWidget {
     switch (session.gameId) {
       case 'acquire':
         return AcquireRoomPage(session: session);
+      case 'planetx':
+        return PlanetXRoomPage(session: session);
       default:
         return UnsupportedGameRoomPage(session: session);
     }
