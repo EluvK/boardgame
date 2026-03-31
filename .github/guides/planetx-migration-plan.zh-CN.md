@@ -1,4 +1,4 @@
-****# Planet X 迁移执行手册（并入 BoardGames Lobby）
+# Planet X 迁移执行手册（并入 BoardGames Lobby）
 
 本手册用于将 `ref/planetx_server` + `ref/planetx_client` 逐步吸收进当前仓库架构（`boardgames_server` + `bg_runtime` + `lib`）。
 
@@ -234,8 +234,10 @@ flutter analyze
 
 ### 勾选
 
-- [ ] 关键组件迁移完成
-- [ ] 交互闭环完成
+- [x] 关键组件迁移完成（首批：状态面板 + 星区渲染 + 操作日志 + 基础操作栏）
+- [x] 页面结构已与旧 `game.dart` 同构（RoomInfos/MessageBar/GameResult/OpBar + StarMap/Logs）
+- [x] 组件拆分首轮完成（`planetx_sections.dart` + `planetx_star_map.dart` + `planetx_op_bar.dart` + `planetx_logs.dart`）
+- [x] 交互闭环完成（MVP：sync/recommend/survey/target/research）
 - [ ] 重连恢复可用
 
 ---
@@ -528,3 +530,29 @@ cargo run -p bg_runtime
 - [x] 插件可返回规范化 `broadcast/message`
 - [x] 至少 1 条核心操作链路跑通（请求 -> 状态更新 -> 反馈）
 - [x] 错误码与提示语义可稳定复现
+
+---
+
+## 11. 当前会话遗留问题（已整理）
+
+本节用于承接本次 session 暂停点，确保后续继续时不丢上下文。
+
+### 11.1 高优先级（功能完整性）
+
+- [ ] 补全操作交互：`locate` / `ready publish` / `do publish` 的前端输入与触发按钮。
+- [ ] 重连恢复：页面重进后恢复标记缓冲（`_sectorMarks`）与关键视图状态（会议视图开关等）。
+
+### 11.2 中优先级（体验与可维护性）
+
+- [ ] 日志面板增强：区分结构化字段（时间、操作者、动作类型），避免仅展示原始 JSON 行。
+- [ ] StarMap 组件继续贴近旧版行为：补齐更多标注语义与视觉细节。
+
+### 11.3 低优先级（收尾）
+
+- [ ] 进行 M6 双游戏回归（Acquire + PlanetX 并发 smoke test）。
+- [ ] 同步补充协议字段文档中的前端示例负载与错误处理样例。
+
+### 11.4 本次已验证
+
+- [x] `flutter analyze`（PlanetX 页面与组件相关文件）通过，无新告警。
+- [x] 组件职责边界已稳定：页面负责状态编排，组件负责呈现与交互触发。
