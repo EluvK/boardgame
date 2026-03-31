@@ -50,7 +50,7 @@ pub struct DoPublishOperation {
 
 // result
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationResult {
     Survey(usize),

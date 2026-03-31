@@ -160,11 +160,17 @@ cargo check --workspace
 - 两名玩家 ready 后可开局。
 - 至少一轮操作可完成并广播状态。
 
+当前已实现（2026-03-31）：
+
+- `planetx_sync`：返回当前状态快照。
+- `planetx_op`：已接入真实计算首版（`survey` / `target` / `research` / `locate`）。
+- `planetx_recommend`：已接入真实计算（基于 `ChoiceFilter` 返回 `count` / `can_locate`）。
+
 ### 勾选
 
-- [ ] `Game` trait 实现完成
-- [ ] action payload 协议落地
-- [ ] 状态广播与消息反馈可用
+- [x] `Game` trait 实现完成
+- [x] action payload 协议落地（最小支持 `planetx_op`/`planetx_recommend`/`planetx_sync`）
+- [x] 状态广播与消息反馈可用（MVP）
 
 ---
 
@@ -518,7 +524,7 @@ cargo run -p bg_runtime
 
 ## 10.5 M3 完成判定
 
-- [ ] 客户端可通过统一 `action` 发送 PlanetX 操作
-- [ ] 插件可返回规范化 `broadcast/message`
-- [ ] 至少 1 条核心操作链路跑通（请求 -> 状态更新 -> 反馈）
-- [ ] 错误码与提示语义可稳定复现
+- [x] 客户端可通过统一 `action` 发送 PlanetX 操作
+- [x] 插件可返回规范化 `broadcast/message`
+- [x] 至少 1 条核心操作链路跑通（请求 -> 状态更新 -> 反馈）
+- [x] 错误码与提示语义可稳定复现

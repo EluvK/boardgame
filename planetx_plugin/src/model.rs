@@ -15,6 +15,17 @@ pub struct PlanetXState {
     pub seq: u64,
     pub last_actor: Option<String>,
     pub last_payload: Option<Value>,
+    pub map_seed: u64,
+    pub map_type: MapType,
+    pub map_sectors: Vec<SectorType>,
+    pub research_clues: Vec<Clue>,
+    pub turn_order: Vec<String>,
+    pub turn_index: usize,
+    pub player_steps: HashMap<String, usize>,
+    pub player_target_uses: HashMap<String, usize>,
+    #[serde(skip, default)]
+    pub choice_filters: HashMap<String, ChoiceFilter>,
+    pub player_results: HashMap<String, Vec<OperationResult>>,
 }
 
 impl PlanetXState {
@@ -25,7 +36,34 @@ impl PlanetXState {
             seq: 0,
             last_actor: None,
             last_payload: None,
+            map_seed: rand::random::<u32>() as u64,
+            map_type: MapType::Standard,
+            map_sectors: vec![],
+            research_clues: vec![],
+            turn_order: vec![],
+            turn_index: 0,
+            player_steps: HashMap::new(),
+            player_target_uses: HashMap::new(),
+            choice_filters: HashMap::new(),
+            player_results: HashMap::new(),
         }
+    }
+
+    pub fn current_player(&self) -> Option<&str> {
+        if self.turn_order.is_empty() {
+            return None;
+        }
+        self.turn_order
+            .get(self.turn_index % self.turn_order.len())
+            .map(String::as_str)
+    }
+
+    pub fn advance_turn(&mut self) {
+        if self.turn_order.is_empty() {
+            self.turn_index = 0;
+            return;
+        }
+        self.turn_index = (self.turn_index + 1) % self.turn_order.len();
     }
 }
 
