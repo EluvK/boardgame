@@ -112,9 +112,9 @@ cargo test -p planetx_plugin
 
 ### 勾选
 
-- [ ] 规则模块迁移完成
-- [ ] 通信层耦合清理完成
-- [ ] 测试通过
+- [x] 规则模块迁移完成（map/operation/recommendation + model 已迁入）
+- [x] 通信层耦合清理完成（旧 socket 依赖未引入插件）
+- [x] 测试通过（`cargo test -p planetx_plugin`，8 passed）
 
 ---
 
@@ -449,10 +449,10 @@ cargo run -p bg_runtime
 
 ## 9.5 M2 完成判定
 
-- [ ] 旧服务端规则层已迁移到 `planetx_plugin`
-- [ ] 旧 socket 绑定代码未被引入插件
-- [ ] `cargo test -p planetx_plugin` 通过
-- [ ] 可进入 M3 协议适配阶段
+- [x] 旧服务端规则层已迁移到 `planetx_plugin`（首批：map/operation/recommendation/model）
+- [x] 旧 socket 绑定代码未被引入插件
+- [x] `cargo test -p planetx_plugin` 通过
+- [x] 可进入 M3 协议适配阶段
 
 ---
 
