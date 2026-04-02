@@ -470,6 +470,8 @@ class _PlanetXOpBarFormState extends State<_PlanetXOpBarForm> {
         return const [PlanetXOpKind.readyPublish];
       case 'meeting_publish':
         return const [PlanetXOpKind.doPublish];
+      case 'meeting_check':
+        return const [];
       case 'last_move':
         return const [PlanetXOpKind.locate, PlanetXOpKind.doPublish];
       case 'game_end':

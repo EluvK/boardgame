@@ -128,6 +128,7 @@ pub enum PlanetXStage {
     UserMove,
     MeetingProposal,
     MeetingPublish,
+    MeetingCheck,
     LastMove,
     GameEnd,
 }

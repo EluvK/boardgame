@@ -10,7 +10,7 @@
 2. 服务端已迁移为插件模式（`planetx_plugin`），并接入统一房间框架（`boardgames_server`）。
 3. 客户端已完成独立页面与核心组件重建（星图、操作栏、日志）。
 4. 当前最大差距不是“是否可玩”，而是“与 ref 状态机和事件语义是否完全一致”。
-5. 最关键规则差距：当前 `PlanetXStage` 没有 `MeetingCheck` 阶段，而 ref 有。
+5. 关键阶段差距（`MeetingCheck`）已在本轮补齐，当前重点转为“阶段时序与 ref 等价性验证”。
 6. 协议层已从 ref 的专有事件（`room/op/recommend/sync`）迁移为统一 `action + broadcast/message`，这属于架构差异，不是简单 bug。
 7. PlanetX 目前建议定位为“迁移中版本（可联调）”，不建议按“已完全对齐 ref”对外宣称完成。
 
@@ -32,16 +32,16 @@
 ### 3.2 状态机阶段
 
 - ref：`UserMove -> MeetingProposal -> MeetingPublish -> MeetingCheck -> LastMove -> GameEnd`（见 `ref/planetx_server/src/room/game_state.rs`）。
-- current：`UserMove -> MeetingProposal -> MeetingPublish -> LastMove -> GameEnd`（见 `planetx_plugin/src/model.rs` 中 `PlanetXStage`）。
-- 差距：缺少 `MeetingCheck`，会导致阶段语义与 ref 不完全一致。
-- 优先级：P0。
+- current：`UserMove -> MeetingProposal -> MeetingPublish -> MeetingCheck -> LastMove -> GameEnd`（见 `planetx_plugin/src/model.rs` 中 `PlanetXStage`）。
+- 判定：阶段定义已对齐；后续需要验证广播时序和自动过渡行为。
+- 优先级：P1（等价性验证）。
 
 ### 3.3 会议结算流程
 
-- current 在 `planetx_plugin/src/lib.rs` 的 `MeetingPublish` 分支里直接调用 `resolve_meeting_checks` 后切回 `UserMove`。
-- ref 将会议检查显式建模为 `MeetingCheck` 阶段（阶段更清晰，便于客户端展示与调试）。
-- 差距：逻辑能力部分存在，但阶段建模不一致。
-- 优先级：P0。
+- current 已将会议结算拆分为显式 `MeetingCheck` 过渡：先进入 `MeetingCheck`，再结算并切回 `UserMove`。
+- 客户端操作栏已补 `meeting_check` 禁操作分支。
+- 差距：主要剩余在“事件顺序是否与 ref 表现一致”。
+- 优先级：P1。
 
 ### 3.4 玩家位置与回合语义
 
@@ -67,9 +67,9 @@
 ### 4.2 阶段驱动操作栏
 
 - current 的 `planetx_op_bar.dart` 已按阶段限制操作（`user_move`、`meeting_proposal`、`meeting_publish`、`last_move`、`game_end`）。
-- 因服务端缺 `meeting_check`，客户端也未建对应分支。
-- 差距：阶段展示与 ref 不完全一致。
-- 优先级：P1（依赖服务端 P0 修复）。
+- 客户端已补 `meeting_check` 分支（禁操作态）。
+- 差距：是否需要更明确的过渡提示文案（例如“会议检查中”）仍可优化。
+- 优先级：P2。
 
 ### 4.3 协议接收模型
 
@@ -112,22 +112,21 @@
 
 ### 6.3 未完成/高风险
 
-1. 阶段机未完全对齐 ref（P0）。
-2. 关键时序（会议后检查、终局前后广播顺序）缺专项测试（P1）。
-3. 文档层尚缺“迁移后协议语义基准表”（P1）。
+1. 关键时序（会议后检查、终局前后广播顺序）缺专项测试（P1）。
+2. 文档层尚缺“迁移后协议语义基准表”（P1）。
+3. 会议检查阶段的用户提示与可观测性仍可优化（P2）。
 
 ## 7. 建议迭代顺序（依赖顺序）
 
-1. 先补服务端 `MeetingCheck` 阶段（`planetx_plugin/src/model.rs`、`planetx_plugin/src/lib.rs`）。
-2. 再补客户端 `meeting_check` 阶段显示与操作禁用态（`planetx_op_bar.dart`、`planetx_room_page.dart`）。
-3. 增加阶段流转测试：`UserMove -> MeetingProposal -> MeetingPublish -> MeetingCheck -> UserMove/LastMove`。
-4. 增加跨圈步进与 last move 用户选择测试，校验与 ref 结果一致。
-5. 增加端到端协议回放测试（action -> action_result -> broadcast）覆盖关键路径。
-6. 最后再做 UI 精修与规则说明呈现等体验优化，避免在规则差距未收敛时提前美化。
+1. 增加阶段流转测试：`UserMove -> MeetingProposal -> MeetingPublish -> MeetingCheck -> UserMove/LastMove`。
+2. 增加跨圈步进与 last move 用户选择测试，校验与 ref 结果一致。
+3. 增加端到端协议回放测试（action -> action_result -> broadcast）覆盖关键路径。
+4. 补客户端会议检查阶段的提示文案与日志可观测性。
+5. 最后再做 UI 精修与规则说明呈现等体验优化，避免在规则差距未收敛时提前美化。
 
 ## 8. 验收清单（下一阶段完成标准）
 
-1. `meeting_check` 阶段在服务端状态中可见，客户端可正确渲染。
+1. `meeting_check` 阶段在服务端状态中可见，客户端可正确渲染。（本轮已完成）
 2. 会议阶段结束后 token 检查结果与罚步逻辑稳定。
 3. last move 用户集合在多玩家场景下与 ref 行为一致。
 4. 二圈及以后不会错误释放首圈限定的 x clue。

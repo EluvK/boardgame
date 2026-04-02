@@ -259,25 +259,34 @@ impl PlanetXGame {
                 }
 
                 if state.meeting_published_users.len() >= state.turn_order.len() {
-                    Self::resolve_meeting_checks(state, &map);
-                    for tokens in state.user_tokens.values_mut() {
-                        for token in tokens.iter_mut() {
-                            token.push_at_meeting(&state.revealed_sector_indexes);
-                        }
-                    }
-                    state.game_stage = PlanetXStage::UserMove;
-                    state.meeting_ready_users.clear();
-                    state.meeting_published_users.clear();
-                    state.advance_turn();
-                    state.recompute_visible_range();
+                    state.game_stage = PlanetXStage::MeetingCheck;
                 } else {
                     state.advance_turn();
                 }
+            }
+            PlanetXStage::MeetingCheck => {
+                return Err(game::GameError::Invalid(
+                    "planetx_invalid_move_in_stage".into(),
+                ));
             }
             PlanetXStage::GameEnd => {}
         }
 
         Ok(result)
+    }
+
+    fn resolve_meeting_check_transition(state: &mut PlanetXState, map: &Map) {
+        Self::resolve_meeting_checks(state, map);
+        for tokens in state.user_tokens.values_mut() {
+            for token in tokens.iter_mut() {
+                token.push_at_meeting(&state.revealed_sector_indexes);
+            }
+        }
+        state.game_stage = PlanetXStage::UserMove;
+        state.meeting_ready_users.clear();
+        state.meeting_published_users.clear();
+        state.advance_turn();
+        state.recompute_visible_range();
     }
 
     fn op_allowed_in_stage(stage: &PlanetXStage, op: &Operation) -> bool {
@@ -288,6 +297,7 @@ impl PlanetXGame {
             ),
             PlanetXStage::MeetingProposal => matches!(op, Operation::ReadyPublish(_)),
             PlanetXStage::MeetingPublish => matches!(op, Operation::DoPublish(_)),
+            PlanetXStage::MeetingCheck => false,
             PlanetXStage::LastMove => matches!(op, Operation::Locate(_) | Operation::DoPublish(_)),
             PlanetXStage::GameEnd => false,
         }
@@ -825,35 +835,79 @@ impl Game for PlanetXGame {
                 };
                 let op_result_json = serde_json::to_value(&op_result).unwrap_or(json!({"error":"planetx_result_encode_failed"}));
 
+                let mut meeting_check_snapshot: Option<PlanetXState> = None;
+                if matches!(s.game_stage, PlanetXStage::MeetingCheck) {
+                    meeting_check_snapshot = Some(s.clone());
+                    let map = match Self::build_runtime_map(s) {
+                        Ok(m) => m,
+                        Err(e) => return ActionResult::Err(e),
+                    };
+                    Self::resolve_meeting_check_transition(s, &map);
+                }
+
                 s.seq += 1;
                 s.last_actor = Some(action.user_id.clone());
                 s.last_payload = Some(action.payload.clone());
 
+                let mut broadcasts = vec![Outbound {
+                    target: OutboundTarget::User(action.user_id.clone()),
+                    payload: json!({
+                        "type": "planetx_op_result",
+                        "room": ctx.room_id,
+                        "seq": s.seq,
+                        "ok": true,
+                        "op": op,
+                        "result": op_result_json,
+                    }),
+                }];
+
+                if let Some(snapshot) = meeting_check_snapshot {
+                    broadcasts.push(Outbound {
+                        target: OutboundTarget::All,
+                        payload: json!({
+                            "type": "state",
+                            "game": "planetx",
+                            "room": ctx.room_id,
+                            "event": "action_applied",
+                            "state": snapshot,
+                        }),
+                    });
+                    broadcasts.push(Outbound {
+                        target: OutboundTarget::All,
+                        payload: json!({
+                            "type": "state",
+                            "game": "planetx",
+                            "room": ctx.room_id,
+                            "event": "meeting_check_entered",
+                            "state": snapshot,
+                        }),
+                    });
+                    broadcasts.push(Outbound {
+                        target: OutboundTarget::All,
+                        payload: json!({
+                            "type": "state",
+                            "game": "planetx",
+                            "room": ctx.room_id,
+                            "event": "meeting_check_resolved",
+                            "state": s,
+                        }),
+                    });
+                } else {
+                    broadcasts.push(Outbound {
+                        target: OutboundTarget::All,
+                        payload: json!({
+                            "type": "state",
+                            "game": "planetx",
+                            "room": ctx.room_id,
+                            "event": "action_applied",
+                            "state": s,
+                        }),
+                    });
+                }
+
                 ActionResult::Ok {
                     events: vec![],
-                    broadcasts: vec![
-                        Outbound {
-                            target: OutboundTarget::User(action.user_id.clone()),
-                            payload: json!({
-                                "type": "planetx_op_result",
-                                "room": ctx.room_id,
-                                "seq": s.seq,
-                                "ok": true,
-                                "op": op,
-                                "result": op_result_json,
-                            }),
-                        },
-                        Outbound {
-                            target: OutboundTarget::All,
-                            payload: json!({
-                                "type": "state",
-                                "game": "planetx",
-                                "room": ctx.room_id,
-                                "event": "action_applied",
-                                "state": s,
-                            }),
-                        },
-                    ],
+                    broadcasts,
                 }
             }
             "planetx_recommend" => {
@@ -1012,6 +1066,10 @@ mod tests {
         )
         .expect("bob do publish should succeed");
         assert!(matches!(r4, OperationResult::DoPublish((2, SectorType::Comet))));
+        assert_eq!(s.game_stage, PlanetXStage::MeetingCheck);
+
+        let map = PlanetXGame::build_runtime_map(&s).expect("map should be available");
+        PlanetXGame::resolve_meeting_check_transition(&mut s, &map);
         assert_eq!(s.game_stage, PlanetXStage::UserMove);
         assert!(s.meeting_ready_users.is_empty());
         assert!(s.meeting_published_users.is_empty());
