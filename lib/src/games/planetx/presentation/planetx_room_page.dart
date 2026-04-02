@@ -36,6 +36,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
   PlanetXStateEnvelope? _latestState;
   final List<PlanetXLogEntry> _logs = [];
   bool _busy = false;
+  bool _leaving = false;
   bool _settingReady = false;
   bool _isReady = false;
   bool _roomStarted = false;
@@ -45,12 +46,15 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
   List<String> _readyUsers = const [];
   String? _error;
   bool _showMeetingView = false;
-  double _mapRotationDegrees = 0;
+  double _mapRotationDegrees = 180;
   int _recommendCount = 0;
   bool _canLocate = false;
   final List<PlanetXLogEntry> _opLog = [];
   final List<PlanetXLogEntry> _clueLog = [];
   final List<PlanetXLogEntry> _meetingLog = [];
+  final Map<String, String> _clueSecretsByIndex = <String, String>{};
+  final Map<String, String> _clueDetailsByIndex = <String, String>{};
+  final Map<String, String> _playerNamesById = <String, String>{};
   String _latestHint = '';
 
   _SectorMarkMode _markMode = _SectorMarkMode.confirm;
@@ -64,7 +68,12 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     _client = PlanetXClient(api: widget.session.api);
     widget.session.api.addBroadcastListener(_onBroadcast);
     widget.session.api.addMessageListener(_onMessage);
+    final latest = widget.session.api.latestStatePayload;
+    if (latest != null) {
+      _tryApplyPlanetXState(latest);
+    }
     _restoreUiState();
+    _ensureMarkBuffer();
     _ensureJoined();
   }
 
@@ -95,8 +104,6 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     }
 
     final type = payload['type']?.toString() ?? '';
-    final game = payload['game']?.toString() ?? '';
-
     if (type == 'ready_state') {
       final readyStateRaw = payload['ready_state'];
       if (readyStateRaw is Map) {
@@ -119,27 +126,53 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
       return;
     }
 
-    if (type == 'state' && game == 'planetx') {
-      setState(() {
-        _latestState = PlanetXStateEnvelope.fromJson(payload);
-        _roomStarted = _latestState?.state['started'] == true;
-        _ensureMarkBuffer();
-        _latestHint = _latestState?.event ?? '';
-        _appendLimited(
-          _logs,
-          PlanetXLogEntry(
-            time: DateTime.now(),
-            type: 'state',
-            actor: payload['by']?.toString() ?? '',
-            summary: _latestState?.event ?? '',
-            raw: jsonEncode(payload),
-          ),
-        );
-        if (_logs.length > 30) {
-          _logs.removeLast();
-        }
-      });
+    if (type == 'room_context') {
+      final namesRaw = payload['player_names'];
+      if (namesRaw is Map) {
+        setState(() {
+          _mergePlayerNamesMap(namesRaw);
+        });
+      }
+      return;
     }
+
+    if (_tryApplyPlanetXState(payload)) {
+      return;
+    }
+  }
+
+  bool _tryApplyPlanetXState(Map<String, dynamic> payload) {
+    final type = payload['type']?.toString() ?? '';
+    final game = payload['game']?.toString() ?? '';
+    if (!(type == 'state' && game == 'planetx')) {
+      return false;
+    }
+
+    if (!mounted) {
+      return true;
+    }
+
+    setState(() {
+      _latestState = PlanetXStateEnvelope.fromJson(payload);
+      _roomStarted = _latestState?.state['started'] == true;
+      _ensureMarkBuffer();
+      _syncClueDataFromState(_latestState?.state ?? const <String, dynamic>{});
+      _latestHint = _latestState?.event ?? '';
+      _appendLimited(
+        _logs,
+        PlanetXLogEntry(
+          time: DateTime.now(),
+          type: 'state',
+          actor: payload['by']?.toString() ?? '',
+          summary: _latestState?.event ?? '',
+          raw: jsonEncode(payload),
+        ),
+      );
+      if (_logs.length > 30) {
+        _logs.removeLast();
+      }
+    });
+    return true;
   }
 
   void _onMessage(Map<String, dynamic> payload) {
@@ -148,6 +181,20 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     }
 
     final type = payload['type']?.toString() ?? '';
+    if (type == 'room_context') {
+      final namesRaw = payload['player_names'];
+      if (namesRaw is Map) {
+        setState(() {
+          _mergePlayerNamesMap(namesRaw);
+        });
+      }
+      return;
+    }
+
+    if (_tryApplyPlanetXState(payload)) {
+      return;
+    }
+
     if (type.startsWith('planetx_')) {
       setState(() {
         if (type == 'planetx_recommend_result') {
@@ -195,14 +242,16 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
             );
           }
           if (result.containsKey('research')) {
+            final research = _asMap(result['research']);
+            _applyResearchClue(research);
             _appendLimited(
               _clueLog,
               PlanetXLogEntry(
                 time: DateTime.now(),
                 type: 'research',
                 actor: payload['by']?.toString() ?? widget.session.userId,
-                summary: 'research clue updated',
-                raw: jsonEncode(result['research']),
+                summary: 'research ${_normalizeClueIndex(research['index'])}',
+                raw: jsonEncode(research),
               ),
             );
           }
@@ -221,6 +270,38 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
           _logs.removeLast();
         }
       });
+    }
+  }
+
+  Future<void> _leaveRoom() async {
+    if (_leaving) {
+      return;
+    }
+
+    setState(() {
+      _leaving = true;
+      _error = null;
+    });
+
+    try {
+      await widget.session.onLeaveRoom(widget.session.roomId);
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _error = e.toString();
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _leaving = false;
+        });
+      }
     }
   }
 
@@ -336,13 +417,21 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     final mapSize = _asInt(stateMap['map_type'] == 'expert' ? 18 : 12);
     final publishableTypes = _publishableTypes(stateMap);
     final availableSectorTypes = _availableSectorTypes(sectors, publishableTypes);
-    final currentPlayer = _latestState?.raw['state'] is Map
-        ? (_asMap(_latestState!.raw['state'])['current_player']?.toString() ?? '')
-        : '';
+    final currentPlayer = _resolveCurrentPlayer(stateMap);
+    final currentPlayerName = _playerDisplayName(currentPlayer);
+    final playerNames = players.map(_playerDisplayName).toList();
+    final selfName = _playerDisplayName(widget.session.userId);
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Planet X · ${widget.session.roomId}'),
+        title: Text('Planet X · ${widget.session.roomId} · $selfName'),
+        actions: [
+          TextButton.icon(
+            onPressed: _leaving ? null : _leaveRoom,
+            icon: const Icon(Icons.logout),
+            label: Text(_leaving ? 'Leaving...' : 'Leave Room'),
+          ),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(4),
@@ -354,8 +443,9 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
               child: PlanetXRoomInfos(
                 roomId: widget.session.roomId,
                 userId: widget.session.userId,
-                currentPlayer: currentPlayer,
-                players: players,
+                currentPlayer: currentPlayerName,
+                players: playerNames,
+                playerNameById: _playerNamesById,
                 stateMap: stateMap,
               ),
             ),
@@ -375,6 +465,10 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
               padding: const EdgeInsets.only(bottom: 4),
               child: PlanetXOpBar(
                 busy: _busy,
+                roomStarted: _roomStarted,
+                currentUserId: widget.session.userId,
+                currentPlayerId: currentPlayer,
+                currentPlayerName: currentPlayerName,
                 gameStage: gameStage,
                 mapSize: mapSize,
                 sectorTypes: availableSectorTypes,
@@ -455,7 +549,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
                     rotationDegrees: _mapRotationDegrees,
                     onRotateCenter: () {
                       setState(() {
-                        _mapRotationDegrees = (_mapRotationDegrees + 90) % 360;
+                        _mapRotationDegrees = (_normalizeRightAngle(_mapRotationDegrees) + 90) % 360;
                       });
                       _persistUiState();
                     },
@@ -476,6 +570,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
                       'recommend_can_locate',
                     ),
                     busy: _busy,
+                    fallbackSectorCount: mapSize,
                     markModeConfirm: _markMode == _SectorMarkMode.confirm,
                     onMarkModeChanged: (confirmMode) {
                       setState(() {
@@ -487,7 +582,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
                     canRedo: _canRedoMarks,
                     onUndo: _undoMarks,
                     onRedo: _redoMarks,
-                    historyText: '${_markHistoryIndex + 1} / ${_markHistory.length}',
+                    historyText: '${_markHistoryIndex < 0 ? 0 : _markHistoryIndex} / ${_markHistory.isEmpty ? 0 : _markHistory.length - 1}',
                     onMarkTap: _onMarkTap,
                     sectorMarks: _sectorMarks,
                     tokensCount: _countTokensInState(),
@@ -497,7 +592,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
                 final logsPanel = PlanetXLogsPanel(
                   currentUserId: widget.session.userId,
                   opLog: _opLog,
-                  clueLog: _clueLog,
+                  clueRows: _buildClueRows(),
                   meetingLog: _meetingLog,
                 );
 
@@ -526,14 +621,24 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
   }
 
   void _ensureMarkBuffer() {
-    final sectors = _asStringList(_latestState?.state['map_sectors']);
-    if (sectors.isEmpty) {
+    final targetCount = _markSectorCount();
+    if (targetCount <= 0) {
       return;
     }
-    if (_sectorMarks.length == sectors.length) {
+
+    final shapeOk = _sectorMarks.length == targetCount && _sectorMarks.every((row) => row.length == 6);
+    if (shapeOk) {
+      if (_markHistory.isEmpty) {
+        _markHistory
+          ..clear()
+          ..add(_cloneMarks(_sectorMarks));
+        _markHistoryIndex = 0;
+        _persistUiState();
+      }
       return;
     }
-    _sectorMarks = List.generate(sectors.length, (_) => List<int>.filled(6, 0));
+
+    _sectorMarks = List.generate(targetCount, (_) => List<int>.filled(6, 1));
     _markHistory
       ..clear()
       ..add(_cloneMarks(_sectorMarks));
@@ -542,20 +647,26 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
   }
 
   void _onMarkTap(int sectorIndex, int slotIndex) {
-    if (sectorIndex < 0 || sectorIndex >= _sectorMarks.length) {
+    if (_sectorMarks.isEmpty) {
+      _ensureMarkBuffer();
+    }
+    if (sectorIndex < 0 || sectorIndex >= _sectorMarks.length || slotIndex < 0 || slotIndex >= 6) {
       return;
     }
-    _pushMarkHistory();
+
+    final nextMarks = _cloneMarks(_sectorMarks);
 
     setState(() {
       if (_markMode == _SectorMarkMode.confirm) {
         for (int i = 0; i < 6; i++) {
-          _sectorMarks[sectorIndex][i] = 2;
+          nextMarks[sectorIndex][i] = 2;
         }
-        _sectorMarks[sectorIndex][slotIndex] = 1;
+        nextMarks[sectorIndex][slotIndex] = 1;
       } else {
-        _sectorMarks[sectorIndex][slotIndex] = _sectorMarks[sectorIndex][slotIndex] == 1 ? 2 : 1;
+        nextMarks[sectorIndex][slotIndex] = nextMarks[sectorIndex][slotIndex] == 1 ? 2 : 1;
       }
+      _sectorMarks = nextMarks;
+      _recordMarkHistory(_sectorMarks);
     });
     _persistUiState();
   }
@@ -586,12 +697,33 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     _persistUiState();
   }
 
-  void _pushMarkHistory() {
+  void _recordMarkHistory(List<List<int>> marks) {
     if (_markHistoryIndex < _markHistory.length - 1) {
       _markHistory.removeRange(_markHistoryIndex + 1, _markHistory.length);
     }
-    _markHistory.add(_cloneMarks(_sectorMarks));
+    _markHistory.add(_cloneMarks(marks));
     _markHistoryIndex = _markHistory.length - 1;
+  }
+
+  int _markSectorCount() {
+    final stateMap = _latestState?.state ?? <String, dynamic>{};
+    final sectors = _asStringList(stateMap['map_sectors']);
+    if (sectors.isNotEmpty) {
+      return sectors.length;
+    }
+
+    final mapType = stateMap['map_type']?.toString();
+    if (mapType == 'expert') {
+      return 18;
+    }
+    if (mapType != null && mapType.isNotEmpty) {
+      return 12;
+    }
+
+    if (_sectorMarks.isNotEmpty) {
+      return _sectorMarks.length;
+    }
+    return 12;
   }
 
   List<List<int>> _cloneMarks(List<List<int>> marks) {
@@ -618,6 +750,186 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     target.insert(0, value);
     if (target.length > 40) {
       target.removeRange(40, target.length);
+    }
+  }
+
+  List<PlanetXClueEntry> _buildClueRows() {
+    const order = <String>['A', 'B', 'C', 'D', 'E', 'F', 'X1', 'X2'];
+    final keys = <String>{..._clueSecretsByIndex.keys, ..._clueDetailsByIndex.keys}.toList();
+    keys.sort((a, b) {
+      final ai = order.indexOf(a);
+      final bi = order.indexOf(b);
+      final av = ai == -1 ? 999 : ai;
+      final bv = bi == -1 ? 999 : bi;
+      if (av != bv) {
+        return av.compareTo(bv);
+      }
+      return a.compareTo(b);
+    });
+
+    return keys
+        .map(
+          (k) => PlanetXClueEntry(
+            index: k,
+            secret: _clueSecretsByIndex[k] ?? '-',
+            detail: _clueDetailsByIndex[k] ?? '',
+          ),
+        )
+        .toList();
+  }
+
+  void _syncClueDataFromState(Map<String, dynamic> stateMap) {
+    final researchClues = stateMap['research_clues'];
+    if (researchClues is List) {
+      for (final raw in researchClues) {
+        if (raw is! Map) {
+          continue;
+        }
+        final clue = _asMap(raw);
+        final idx = _normalizeClueIndex(clue['index']);
+        if (idx.isEmpty) {
+          continue;
+        }
+        _clueSecretsByIndex[idx] = _formatClueSecret(clue);
+      }
+    }
+
+    final resultsByUser = _asMap(stateMap['player_results']);
+    for (final resultList in resultsByUser.values) {
+      if (resultList is! List) {
+        continue;
+      }
+      for (final raw in resultList) {
+        if (raw is! Map) {
+          continue;
+        }
+        final result = _asMap(raw);
+        if (!result.containsKey('research')) {
+          continue;
+        }
+        _applyResearchClue(_asMap(result['research']));
+      }
+    }
+  }
+
+  void _applyResearchClue(Map<String, dynamic> clue) {
+    final idx = _normalizeClueIndex(clue['index']);
+    if (idx.isEmpty) {
+      return;
+    }
+    _clueSecretsByIndex[idx] = _formatClueSecret(clue);
+    _clueDetailsByIndex[idx] = _formatClueDetail(clue);
+  }
+
+  String _normalizeClueIndex(dynamic raw) {
+    final value = raw?.toString().trim().toUpperCase() ?? '';
+    if (value.isEmpty) {
+      return '';
+    }
+    if (value == 'X_1') {
+      return 'X1';
+    }
+    if (value == 'X_2') {
+      return 'X2';
+    }
+    return value;
+  }
+
+  String _formatClueSecret(Map<String, dynamic> clue) {
+    final subject = _sectorLabel(clue['subject']);
+    final object = _sectorLabel(clue['object']);
+    if (subject.isEmpty) {
+      return '-';
+    }
+    if (object.isEmpty || object == subject || object == 'Space') {
+      return subject;
+    }
+    return '$subject $object';
+  }
+
+  String _formatClueDetail(Map<String, dynamic> clue) {
+    final subject = _sectorLabel(clue['subject']);
+    final object = _sectorLabel(clue['object']);
+    final connRaw = clue['conn'];
+
+    String conn = '';
+    int? range;
+    if (connRaw is String) {
+      conn = connRaw;
+    } else if (connRaw is Map) {
+      final connMap = _asMap(connRaw);
+      if (connMap.containsKey('allInRange')) {
+        conn = 'allInRange';
+        range = _asInt(connMap['allInRange']);
+      } else if (connMap.containsKey('all_in_range')) {
+        conn = 'allInRange';
+        range = _asInt(connMap['all_in_range']);
+      } else if (connMap.containsKey('notInRange')) {
+        conn = 'notInRange';
+        range = _asInt(connMap['notInRange']);
+      } else if (connMap.containsKey('not_in_range')) {
+        conn = 'notInRange';
+        range = _asInt(connMap['not_in_range']);
+      }
+    }
+
+    final isXSubject = subject == 'X';
+    switch (conn) {
+      case 'allAdjacent':
+        return isXSubject ? '$subject and $object are adjacent' : 'All $subject are adjacent to $object';
+      case 'oneAdjacent':
+        return isXSubject
+            ? '$subject and $object are adjacent'
+            : 'At least one $subject is adjacent to $object';
+      case 'notAdjacent':
+        return isXSubject ? '$subject is not adjacent to $object' : 'No $subject is adjacent to $object';
+      case 'oneOpposite':
+        return isXSubject
+            ? '$subject is opposite to $object'
+            : 'At least one $subject is opposite to $object';
+      case 'notOpposite':
+        return isXSubject ? '$subject is not opposite to $object' : 'No $subject is opposite to $object';
+      case 'allInRange':
+        if (range == null) {
+          return '';
+        }
+        if (!isXSubject && object == subject) {
+          return 'All $subject are in an interval of length $range';
+        }
+        return isXSubject
+            ? '$subject is within $range sectors of $object'
+            : 'All $subject are within $range sectors of $object';
+      case 'notInRange':
+        if (range == null) {
+          return '';
+        }
+        return isXSubject
+            ? '$subject is not within $range sectors of $object'
+            : 'No $subject is within $range sectors of $object';
+      default:
+        return '';
+    }
+  }
+
+  String _sectorLabel(dynamic raw) {
+    final value = raw?.toString().trim().toLowerCase() ?? '';
+    switch (value) {
+      case 'comet':
+        return 'Comet';
+      case 'asteroid':
+        return 'Asteroid';
+      case 'dwarf_planet':
+      case 'dwarfplanet':
+        return 'Dwarf Planet';
+      case 'nebula':
+        return 'Nebula';
+      case 'space':
+        return 'Space';
+      case 'x':
+      case 'planetx':
+        return 'X';
+      default:
+        return raw?.toString() ?? '';
     }
   }
 
@@ -658,7 +970,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
   Widget _buildReadyBar() {
     final waitingReady = !_roomStarted;
     final readyText = 'ready $_readyCount/${_playerCount == 0 ? '-' : _playerCount} (min $_minPlayers)';
-    final readyUsersText = _readyUsers.isEmpty ? '-' : _readyUsers.join(', ');
+    final readyUsersText = _readyUsers.isEmpty ? '-' : _readyUsers.map(_playerDisplayName).join(', ');
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -729,6 +1041,21 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     return result.toList()..sort();
   }
 
+  String _resolveCurrentPlayer(Map<String, dynamic> stateMap) {
+    final explicit = stateMap['current_player']?.toString() ?? '';
+    if (explicit.isNotEmpty) {
+      return explicit;
+    }
+
+    final order = _asStringList(stateMap['turn_order']);
+    if (order.isEmpty) {
+      return '';
+    }
+    final turnIndex = _asInt(stateMap['turn_index']);
+    final idx = turnIndex % order.length;
+    return order[idx];
+  }
+
   List<String> _availableSectorTypes(List<String> sectors, List<String> publishableTypes) {
     final result = <String>{};
     for (final s in sectors) {
@@ -743,6 +1070,24 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     return result.toList()..sort();
   }
 
+  void _mergePlayerNamesMap(Map rawMap) {
+    for (final entry in rawMap.entries) {
+      final id = entry.key.toString().trim();
+      final name = entry.value?.toString().trim() ?? '';
+      if (id.isNotEmpty && name.isNotEmpty) {
+        _playerNamesById[id] = name;
+      }
+    }
+  }
+
+  String _playerDisplayName(String uid) {
+    final mapped = _playerNamesById[uid]?.trim();
+    if (mapped != null && mapped.isNotEmpty) {
+      return mapped;
+    }
+    return uid;
+  }
+
   String _uiStateKey() {
     return '$_uiStateKeyPrefix:${widget.session.roomId}:${widget.session.userId}';
   }
@@ -755,7 +1100,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     final map = _asMap(raw);
 
     _showMeetingView = map['show_meeting_view'] == true;
-    _mapRotationDegrees = _asInt(map['map_rotation_degrees']).toDouble();
+    _mapRotationDegrees = _normalizeRightAngle(_asInt(map['map_rotation_degrees']).toDouble());
 
     final mode = map['mark_mode']?.toString();
     if (mode == 'excluded') {
@@ -777,6 +1122,11 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
       final idx = _asInt(map['mark_history_index']);
       _markHistoryIndex = idx.clamp(0, _markHistory.length - 1);
       _sectorMarks = _cloneMarks(_markHistory[_markHistoryIndex]);
+    } else if (_sectorMarks.isNotEmpty) {
+      _markHistory
+        ..clear()
+        ..add(_cloneMarks(_sectorMarks));
+      _markHistoryIndex = 0;
     }
   }
 
@@ -802,7 +1152,15 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
       if (row is! List) {
         continue;
       }
-      parsed.add(row.map((e) => _asInt(e)).toList());
+      parsed.add(
+        row.map((e) {
+          final v = _asInt(e);
+          if (v == 2) {
+            return 2;
+          }
+          return 1;
+        }).toList(),
+      );
     }
     return parsed;
   }
@@ -820,6 +1178,12 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     }
     return parsed;
   }
+}
+
+double _normalizeRightAngle(double degrees) {
+  final n = ((degrees % 360) + 360) % 360;
+  final quarter = (n / 90).round() % 4;
+  return (quarter * 90).toDouble();
 }
 
 Map<String, dynamic> _asMap(dynamic data) {

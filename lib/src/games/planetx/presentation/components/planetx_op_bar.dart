@@ -13,6 +13,10 @@ class PlanetXOpBar extends StatelessWidget {
   const PlanetXOpBar({
     super.key,
     required this.busy,
+    required this.roomStarted,
+    required this.currentUserId,
+    required this.currentPlayerId,
+    required this.currentPlayerName,
     required this.gameStage,
     required this.mapSize,
     required this.sectorTypes,
@@ -27,6 +31,10 @@ class PlanetXOpBar extends StatelessWidget {
   });
 
   final bool busy;
+  final bool roomStarted;
+  final String currentUserId;
+  final String currentPlayerId;
+  final String currentPlayerName;
   final String gameStage;
   final int mapSize;
   final List<String> sectorTypes;
@@ -43,6 +51,10 @@ class PlanetXOpBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return _PlanetXOpBarForm(
       busy: busy,
+      roomStarted: roomStarted,
+      currentUserId: currentUserId,
+      currentPlayerId: currentPlayerId,
+      currentPlayerName: currentPlayerName,
       gameStage: gameStage,
       mapSize: mapSize,
       sectorTypes: sectorTypes,
@@ -61,6 +73,10 @@ class PlanetXOpBar extends StatelessWidget {
 class _PlanetXOpBarForm extends StatefulWidget {
   const _PlanetXOpBarForm({
     required this.busy,
+    required this.roomStarted,
+    required this.currentUserId,
+    required this.currentPlayerId,
+    required this.currentPlayerName,
     required this.gameStage,
     required this.mapSize,
     required this.sectorTypes,
@@ -75,6 +91,10 @@ class _PlanetXOpBarForm extends StatefulWidget {
   });
 
   final bool busy;
+  final bool roomStarted;
+  final String currentUserId;
+  final String currentPlayerId;
+  final String currentPlayerName;
   final String gameStage;
   final int mapSize;
   final List<String> sectorTypes;
@@ -122,7 +142,8 @@ class _PlanetXOpBarFormState extends State<_PlanetXOpBarForm> {
   Widget build(BuildContext context) {
     final opTypes = widget.sectorTypes.where((s) => s != 'x' && s != 'space').toList();
     final publishTypes = widget.publishableTypes.isEmpty ? opTypes : widget.publishableTypes;
-    final availableOps = _opsByStage(widget.gameStage);
+    final isMyTurn = widget.currentPlayerId.isNotEmpty && widget.currentPlayerId == widget.currentUserId;
+    final availableOps = widget.roomStarted && isMyTurn ? _opsByStage(widget.gameStage) : const <PlanetXOpKind>[];
 
     if (_expanded != null && !availableOps.contains(_expanded)) {
       _expanded = null;
@@ -131,6 +152,17 @@ class _PlanetXOpBarFormState extends State<_PlanetXOpBarForm> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Text(
+            !widget.roomStarted
+                ? 'Game not started'
+                : (isMyTurn
+                    ? 'Your turn'
+                    : 'Waiting: ${widget.currentPlayerName.isEmpty ? '-' : widget.currentPlayerName}'),
+            style: const TextStyle(fontSize: 12, color: Colors.black54),
+          ),
+        ),
         Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -284,7 +316,14 @@ class _PlanetXOpBarFormState extends State<_PlanetXOpBarForm> {
       case 'last_move':
         return const [PlanetXOpKind.locate, PlanetXOpKind.doPublish];
       default:
-        return const [];
+        return const [
+          PlanetXOpKind.survey,
+          PlanetXOpKind.target,
+          PlanetXOpKind.research,
+          PlanetXOpKind.locate,
+          PlanetXOpKind.readyPublish,
+          PlanetXOpKind.doPublish,
+        ];
     }
   }
 

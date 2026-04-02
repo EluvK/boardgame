@@ -7,6 +7,7 @@ class PlanetXRoomInfos extends StatelessWidget {
     required this.userId,
     required this.currentPlayer,
     required this.players,
+    required this.playerNameById,
     required this.stateMap,
   });
 
@@ -14,15 +15,24 @@ class PlanetXRoomInfos extends StatelessWidget {
   final String userId;
   final String currentPlayer;
   final List<String> players;
+  final Map<String, String> playerNameById;
   final Map<String, dynamic> stateMap;
 
   @override
   Widget build(BuildContext context) {
     final seq = stateMap['seq']?.toString() ?? '-';
     final started = stateMap['started'] == true;
-    final turnOrder = _asStringList(stateMap['turn_order']);
+    final turnOrder = _asStringList(stateMap['turn_order']).map(_displayName).toList();
+    final turnIndex = _asInt(stateMap['turn_index']);
     final mapSeed = stateMap['map_seed']?.toString() ?? '-';
     final mapType = stateMap['map_type']?.toString() ?? '-';
+    final current = currentPlayer.isEmpty ? '-' : currentPlayer;
+    final isMyTurn = currentPlayer.isNotEmpty && currentPlayer == userId;
+    final phaseText = !started
+        ? 'Waiting for ready/start'
+        : (currentPlayer.isEmpty
+            ? 'Waiting for state sync'
+            : (isMyTurn ? 'Your turn' : 'Waiting for $currentPlayer'));
 
     return Container(
       decoration: BoxDecoration(
@@ -30,24 +40,64 @@ class PlanetXRoomInfos extends StatelessWidget {
         borderRadius: BorderRadius.circular(6),
       ),
       padding: const EdgeInsets.all(8),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 4,
-        alignment: WrapAlignment.spaceEvenly,
-        crossAxisAlignment: WrapCrossAlignment.center,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('room: $roomId'),
-          Text('user: $userId'),
-          Text('current: ${currentPlayer.isEmpty ? '-' : currentPlayer}'),
-          Text('players: ${players.join(', ')}'),
-          Text('started: $started'),
-          Text('seq: $seq'),
-          Text('seed: $mapSeed'),
-          Text('mode: $mapType'),
-          if (turnOrder.isNotEmpty) Text('turn: ${turnOrder.join(' -> ')}'),
+          Row(
+            children: [
+              _statusChip(
+                label: started ? 'STARTED' : 'WAIT_READY',
+                color: started ? const Color(0xFF1E7D39) : const Color(0xFFB26A00),
+              ),
+              const SizedBox(width: 8),
+              _statusChip(
+                label: isMyTurn ? 'MY_TURN' : 'TURN_WAIT',
+                color: isMyTurn ? const Color(0xFF00695C) : const Color(0xFF546E7A),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  phaseText,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 10,
+            runSpacing: 6,
+            children: [
+              Text('room: $roomId'),
+              Text('current: $current'),
+              Text('seq: $seq'),
+              Text('turn_idx: $turnIndex'),
+              Text('mode: $mapType'),
+              Text('seed: $mapSeed'),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text('players (${players.length}): ${players.join(', ')}'),
+          if (turnOrder.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text('turn order: ${turnOrder.join(' -> ')}'),
+          ],
         ],
       ),
     );
+  }
+
+  String _displayName(String idOrName) {
+    final v = idOrName.trim();
+    if (v.isEmpty) {
+      return '-';
+    }
+    final mapped = playerNameById[v]?.trim();
+    if (mapped != null && mapped.isNotEmpty) {
+      return mapped;
+    }
+    return v;
   }
 }
 
@@ -63,20 +113,44 @@ class PlanetXMessageBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final text = error == null || error!.isEmpty ? hint : '$hint | $error';
+    final normalizedHint = hint.trim();
+    final text = error != null && error!.isNotEmpty
+        ? error!
+        : (normalizedHint.isNotEmpty ? normalizedHint : 'Waiting for room/game state sync...');
+    final isError = error != null && error!.isNotEmpty;
     return Container(
       decoration: BoxDecoration(
-        border: Border.all(color: Colors.grey, width: 1),
+        border: Border.all(color: isError ? const Color(0xFFB71C1C) : Colors.grey, width: 1),
         borderRadius: BorderRadius.circular(3),
+        color: isError ? const Color(0xFFFFEBEE) : null,
       ),
       alignment: Alignment.center,
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
       child: Text(
         text,
-        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+        style: TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+          color: isError ? const Color(0xFFB71C1C) : Colors.black,
+        ),
       ),
     );
   }
+}
+
+Widget _statusChip({required String label, required Color color}) {
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    decoration: BoxDecoration(
+      color: color.withAlpha(24),
+      borderRadius: BorderRadius.circular(10),
+      border: Border.all(color: color.withAlpha(80), width: 0.8),
+    ),
+    child: Text(
+      label,
+      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: color),
+    ),
+  );
 }
 
 class PlanetXGameResult extends StatelessWidget {

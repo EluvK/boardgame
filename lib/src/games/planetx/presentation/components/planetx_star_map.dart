@@ -13,6 +13,7 @@ class PlanetXStarMap extends StatelessWidget {
     required this.onRecommendCount,
     required this.onRecommendCanLocate,
     required this.busy,
+    required this.fallbackSectorCount,
     required this.markModeConfirm,
     required this.onMarkModeChanged,
     required this.canUndo,
@@ -36,6 +37,7 @@ class PlanetXStarMap extends StatelessWidget {
   final VoidCallback onRecommendCount;
   final VoidCallback onRecommendCanLocate;
   final bool busy;
+  final int fallbackSectorCount;
 
   final bool markModeConfirm;
   final ValueChanged<bool> onMarkModeChanged;
@@ -55,7 +57,7 @@ class PlanetXStarMap extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final displaySectors = sectors.isEmpty
-        ? List<String>.filled(12, 'space')
+        ? List<String>.filled(fallbackSectorCount.clamp(1, 18), 'space')
         : sectors.map(_normalizeSectorType).toList();
 
     return Container(
@@ -159,7 +161,7 @@ class PlanetXStarMap extends StatelessWidget {
             ),
             ButtonSegment<bool>(
               value: false,
-              label: Text('Switch'),
+              label: Text('Exclude'),
               icon: SizedBox(width: 12, child: Icon(Icons.swap_horiz, size: 14)),
             ),
           ],
@@ -176,7 +178,7 @@ class PlanetXStarMap extends StatelessWidget {
           child: IconButton(
             onPressed: canUndo ? onUndo : null,
             icon: const Icon(Icons.undo, size: 20),
-            tooltip: 'Undo',
+            tooltip: 'starmap_button_undo',
           ),
         ),
         SizedBox(
@@ -184,12 +186,15 @@ class PlanetXStarMap extends StatelessWidget {
           child: IconButton(
             onPressed: canRedo ? onRedo : null,
             icon: const Icon(Icons.redo, size: 20),
-            tooltip: 'Redo',
+            tooltip: 'starmap_button_redo',
           ),
         ),
         Padding(
           padding: const EdgeInsets.only(left: 6),
-          child: Text(historyText, style: const TextStyle(fontSize: 12)),
+          child: Tooltip(
+            message: 'starmap_button_history_desc',
+            child: Text(historyText, style: const TextStyle(fontSize: 12)),
+          ),
         ),
       ],
     );
@@ -224,6 +229,7 @@ class PlanetXStarMap extends StatelessWidget {
 
   Widget _buildStarMapView(List<String> displaySectors) {
     final count = displaySectors.length;
+    final season = _seasonForRotation(rotationDegrees);
 
     return LayoutBuilder(
       key: const ValueKey('star_view'),
@@ -289,6 +295,7 @@ class PlanetXStarMap extends StatelessWidget {
                         angle: rotation,
                         child: GestureDetector(
                           onTap: showSlot ? () => onMarkTap(s, slot) : null,
+                          onSecondaryTap: showSlot ? () => onMarkTap(s, slot) : null,
                           child: showSlot
                               ? Transform.rotate(
                                   angle: -rotation,
@@ -318,37 +325,21 @@ class PlanetXStarMap extends StatelessWidget {
                   }(),
                 GestureDetector(
                   onTap: onRotateCenter,
-                  child: Container(
-                    width: 64,
-                    height: 64,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF607D8B),
-                      shape: BoxShape.circle,
-                    ),
-                    alignment: Alignment.center,
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.autorenew_rounded, color: Colors.white, size: 16),
-                        Text(
-                          '${count}S',
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                Positioned(
-                  top: 8,
-                  child: Row(
-                    children: [
-                      const Icon(Icons.navigation, size: 12, color: Colors.black54),
-                      const SizedBox(width: 4),
-                      Text(
-                        'rot ${rotationDegrees.toStringAsFixed(0)}°',
-                        style: const TextStyle(fontSize: 11, color: Colors.black54),
+                  child: Tooltip(
+                    message: 'Spin Season',
+                    child: Container(
+                      width: 64,
+                      height: 64,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF607D8B),
+                        shape: BoxShape.circle,
                       ),
-                    ],
+                      alignment: Alignment.center,
+                      child: Text(
+                        season.label,
+                        style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700),
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -360,6 +351,7 @@ class PlanetXStarMap extends StatelessWidget {
   }
 
   Widget _buildMeetingMapView(List<String> displaySectors) {
+    final season = _seasonForRotation(rotationDegrees);
     return LayoutBuilder(
       key: const ValueKey('meeting_view'),
       builder: (context, constraints) {
@@ -456,17 +448,10 @@ class PlanetXStarMap extends StatelessWidget {
                       shape: BoxShape.circle,
                     ),
                     alignment: Alignment.center,
-                    child: const Text(
-                      'Meeting',
-                      style: TextStyle(color: Colors.white, fontSize: 12),
+                    child: Text(
+                      season.label,
+                      style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700),
                     ),
-                  ),
-                ),
-                Positioned(
-                  top: 8,
-                  child: Text(
-                    'season ${rotationDegrees.toStringAsFixed(0)}°',
-                    style: const TextStyle(fontSize: 11, color: Colors.black54),
                   ),
                 ),
               ],
@@ -571,17 +556,9 @@ class PlanetXStarMap extends StatelessWidget {
     required bool showType,
     required bool emphasized,
   }) {
-    final borderColor = switch (mark) {
-      1 => Colors.green,
-      2 => Colors.blue,
-      _ => Colors.transparent,
-    };
-
-    final bg = switch (mark) {
-      1 => Colors.green.withAlpha(32),
-      2 => Colors.blue.withAlpha(28),
-      _ => _sectorColor(sectorType).withAlpha(emphasized ? 160 : 85),
-    };
+    final confirmed = mark != 2;
+    final border = confirmed ? Border.all(color: Colors.grey, width: 1) : Border.all(color: Colors.transparent);
+    final bg = _sectorColor(sectorType).withAlpha(emphasized ? 160 : 85);
 
     return Container(
       width: 28,
@@ -589,7 +566,7 @@ class PlanetXStarMap extends StatelessWidget {
       decoration: BoxDecoration(
         color: bg,
         shape: BoxShape.circle,
-        border: Border.all(color: borderColor, width: 1.4),
+        border: border,
       ),
       alignment: Alignment.center,
       child: showType
@@ -598,17 +575,15 @@ class PlanetXStarMap extends StatelessWidget {
               child: Image.asset(
                 _sectorAssetPath(sectorType),
                 fit: BoxFit.contain,
+                color: confirmed ? null : Colors.black.withAlpha(28),
+                colorBlendMode: confirmed ? BlendMode.srcOver : BlendMode.srcIn,
                 errorBuilder: (context, error, stackTrace) => Text(
                   _sectorShortLabel(sectorType).substring(0, 1),
                   style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
                 ),
               ),
             )
-          : (mark == 1
-                ? const Icon(Icons.check, size: 13, color: Colors.green)
-                : mark == 2
-                ? const Icon(Icons.close, size: 13, color: Colors.blue)
-                : const SizedBox.shrink()),
+          : const SizedBox.shrink(),
     );
   }
 
@@ -781,6 +756,33 @@ class PlanetXStarMap extends StatelessWidget {
     }
     return true;
   }
+}
+
+class _SeasonInfo {
+  const _SeasonInfo(this.label);
+
+  final String label;
+}
+
+_SeasonInfo _seasonForRotation(double degrees) {
+  final n = _normalizedRightAngle(degrees);
+  switch (n) {
+    case 180:
+      return const _SeasonInfo('春');
+    case 270:
+      return const _SeasonInfo('夏');
+    case 0:
+      return const _SeasonInfo('秋');
+    case 90:
+    default:
+      return const _SeasonInfo('冬');
+  }
+}
+
+int _normalizedRightAngle(double degrees) {
+  final n = ((degrees % 360) + 360) % 360;
+  final quarter = (n / 90).round() % 4;
+  return quarter * 90;
 }
 
 class _CircleBorderPainter extends CustomPainter {

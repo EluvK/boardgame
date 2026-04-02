@@ -16,18 +16,30 @@ class PlanetXLogEntry {
   final String raw;
 }
 
+class PlanetXClueEntry {
+  const PlanetXClueEntry({
+    required this.index,
+    required this.secret,
+    required this.detail,
+  });
+
+  final String index;
+  final String secret;
+  final String detail;
+}
+
 class PlanetXLogsPanel extends StatelessWidget {
   const PlanetXLogsPanel({
     super.key,
     required this.currentUserId,
     required this.opLog,
-    required this.clueLog,
+    required this.clueRows,
     required this.meetingLog,
   });
 
   final String currentUserId;
   final List<PlanetXLogEntry> opLog;
-  final List<PlanetXLogEntry> clueLog;
+  final List<PlanetXClueEntry> clueRows;
   final List<PlanetXLogEntry> meetingLog;
 
   @override
@@ -36,7 +48,7 @@ class PlanetXLogsPanel extends StatelessWidget {
       children: [
         PlanetXOpLogTable(currentUserId: currentUserId, rows: opLog),
         const SizedBox(height: 2),
-        PlanetXClueLogTable(rows: clueLog),
+        PlanetXClueLogTable(rows: clueRows),
         const SizedBox(height: 2),
         PlanetXMeetingLogTable(rows: meetingLog),
       ],
@@ -88,7 +100,7 @@ class PlanetXClueLogTable extends StatelessWidget {
     required this.rows,
   });
 
-  final List<PlanetXLogEntry> rows;
+  final List<PlanetXClueEntry> rows;
 
   @override
   Widget build(BuildContext context) {
@@ -103,8 +115,14 @@ class PlanetXClueLogTable extends StatelessWidget {
           for (final row in rows.take(12))
             TableRow(
               children: [
-                _tableCell(Text('${row.type}: ${row.actor.isEmpty ? '-' : row.actor}')),
-                _tableCell(_tapText(context, row)),
+                _tableCell(Text('${row.index}: ${row.secret}')),
+                _tableCell(
+                  Text(
+                    row.detail,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
               ],
             ),
         ],
