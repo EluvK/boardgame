@@ -13,6 +13,7 @@ class PlanetXOpBar extends StatelessWidget {
   const PlanetXOpBar({
     super.key,
     required this.busy,
+    required this.gameStage,
     required this.mapSize,
     required this.sectorTypes,
     required this.publishableTypes,
@@ -26,6 +27,7 @@ class PlanetXOpBar extends StatelessWidget {
   });
 
   final bool busy;
+  final String gameStage;
   final int mapSize;
   final List<String> sectorTypes;
   final List<String> publishableTypes;
@@ -41,6 +43,7 @@ class PlanetXOpBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return _PlanetXOpBarForm(
       busy: busy,
+      gameStage: gameStage,
       mapSize: mapSize,
       sectorTypes: sectorTypes,
       publishableTypes: publishableTypes,
@@ -58,6 +61,7 @@ class PlanetXOpBar extends StatelessWidget {
 class _PlanetXOpBarForm extends StatefulWidget {
   const _PlanetXOpBarForm({
     required this.busy,
+    required this.gameStage,
     required this.mapSize,
     required this.sectorTypes,
     required this.publishableTypes,
@@ -71,6 +75,7 @@ class _PlanetXOpBarForm extends StatefulWidget {
   });
 
   final bool busy;
+  final String gameStage;
   final int mapSize;
   final List<String> sectorTypes;
   final List<String> publishableTypes;
@@ -117,6 +122,11 @@ class _PlanetXOpBarFormState extends State<_PlanetXOpBarForm> {
   Widget build(BuildContext context) {
     final opTypes = widget.sectorTypes.where((s) => s != 'x' && s != 'space').toList();
     final publishTypes = widget.publishableTypes.isEmpty ? opTypes : widget.publishableTypes;
+    final availableOps = _opsByStage(widget.gameStage);
+
+    if (_expanded != null && !availableOps.contains(_expanded)) {
+      _expanded = null;
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -129,12 +139,7 @@ class _PlanetXOpBarFormState extends State<_PlanetXOpBarForm> {
               onPressed: widget.busy ? null : widget.onSync,
               child: const Text('Sync'),
             ),
-            _opChip(PlanetXOpKind.survey, 'Survey'),
-            _opChip(PlanetXOpKind.target, 'Target'),
-            _opChip(PlanetXOpKind.research, 'Research A'),
-            _opChip(PlanetXOpKind.locate, 'Locate X'),
-            _opChip(PlanetXOpKind.readyPublish, 'Ready Publish'),
-            _opChip(PlanetXOpKind.doPublish, 'Do Publish'),
+            for (final op in availableOps) _opChip(op, _labelForOp(op)),
           ],
         ),
         const SizedBox(height: 8),
@@ -261,6 +266,43 @@ class _PlanetXOpBarFormState extends State<_PlanetXOpBarForm> {
           ),
       ],
     );
+  }
+
+  List<PlanetXOpKind> _opsByStage(String stage) {
+    switch (stage) {
+      case 'user_move':
+        return const [
+          PlanetXOpKind.survey,
+          PlanetXOpKind.target,
+          PlanetXOpKind.research,
+          PlanetXOpKind.locate,
+        ];
+      case 'meeting_proposal':
+        return const [PlanetXOpKind.readyPublish];
+      case 'meeting_publish':
+        return const [PlanetXOpKind.doPublish];
+      case 'last_move':
+        return const [PlanetXOpKind.locate, PlanetXOpKind.doPublish];
+      default:
+        return const [];
+    }
+  }
+
+  String _labelForOp(PlanetXOpKind kind) {
+    switch (kind) {
+      case PlanetXOpKind.survey:
+        return 'Survey';
+      case PlanetXOpKind.target:
+        return 'Target';
+      case PlanetXOpKind.research:
+        return 'Research A';
+      case PlanetXOpKind.locate:
+        return 'Locate X';
+      case PlanetXOpKind.readyPublish:
+        return 'Ready Publish';
+      case PlanetXOpKind.doPublish:
+        return 'Do Publish';
+    }
   }
 
   Widget _opChip(PlanetXOpKind kind, String label) {

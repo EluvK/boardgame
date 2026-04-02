@@ -19,11 +19,13 @@ class PlanetXLogEntry {
 class PlanetXLogsPanel extends StatelessWidget {
   const PlanetXLogsPanel({
     super.key,
+    required this.currentUserId,
     required this.opLog,
     required this.clueLog,
     required this.meetingLog,
   });
 
+  final String currentUserId;
   final List<PlanetXLogEntry> opLog;
   final List<PlanetXLogEntry> clueLog;
   final List<PlanetXLogEntry> meetingLog;
@@ -32,114 +34,194 @@ class PlanetXLogsPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        PlanetXLogTable(title: 'OpLog', rows: opLog),
+        PlanetXOpLogTable(currentUserId: currentUserId, rows: opLog),
         const SizedBox(height: 2),
-        PlanetXLogTable(title: 'ClueLog', rows: clueLog),
+        PlanetXClueLogTable(rows: clueLog),
         const SizedBox(height: 2),
-        PlanetXLogTable(title: 'MeetingLog', rows: meetingLog),
+        PlanetXMeetingLogTable(rows: meetingLog),
       ],
     );
   }
 }
 
-class PlanetXLogTable extends StatelessWidget {
-  const PlanetXLogTable({
+class PlanetXOpLogTable extends StatelessWidget {
+  const PlanetXOpLogTable({
     super.key,
-    required this.title,
+    required this.currentUserId,
     required this.rows,
   });
 
-  final String title;
+  final String currentUserId;
   final List<PlanetXLogEntry> rows;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Text(title, style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 4),
-        Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            color: Theme.of(context).colorScheme.primaryContainer,
-          ),
-          child: Table(
-            border: TableBorder.all(),
-            columnWidths: const {
-              0: FlexColumnWidth(1.2),
-              1: FlexColumnWidth(1.2),
-              2: FlexColumnWidth(1.2),
-              3: FlexColumnWidth(4),
-            },
-            children: [
-              TableRow(
-                children: [
-                  _tableCell(const Text('time', style: TextStyle(fontWeight: FontWeight.bold))),
-                  _tableCell(const Text('type', style: TextStyle(fontWeight: FontWeight.bold))),
-                  _tableCell(const Text('actor', style: TextStyle(fontWeight: FontWeight.bold))),
-                  _tableCell(const Text('summary', style: TextStyle(fontWeight: FontWeight.bold))),
-                ],
-              ),
-              for (final row in rows.take(12)) _entryRow(context, row),
-            ],
-          ),
-        ),
-        const SizedBox(height: 4),
-      ],
-    );
-  }
+    final selfRows = rows.where((e) => e.actor == currentUserId).toList();
+    final otherRows = rows.where((e) => e.actor != currentUserId).toList();
+    final rowCount = [selfRows.length, otherRows.length, rows.length].reduce((a, b) => a > b ? a : b);
 
-  TableRow _entryRow(BuildContext context, PlanetXLogEntry row) {
-    return TableRow(
-      children: [
-        _tableCell(Text(_formatTime(row.time))),
-        _tableCell(Text(row.type)),
-        _tableCell(Text(row.actor.isEmpty ? '-' : row.actor)),
-        InkWell(
-          onTap: () => _showRaw(context, row),
-          child: _tableCell(
-            Text(
-              row.summary,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  String _formatTime(DateTime dt) {
-    final hh = dt.hour.toString().padLeft(2, '0');
-    final mm = dt.minute.toString().padLeft(2, '0');
-    final ss = dt.second.toString().padLeft(2, '0');
-    return '$hh:$mm:$ss';
-  }
-
-  void _showRaw(BuildContext context, PlanetXLogEntry row) {
-    showDialog<void>(
+    return _panel(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text('${row.type} raw'),
-          content: SingleChildScrollView(child: Text(row.raw)),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Close'),
+      title: 'OpLog',
+      table: Table(
+        border: TableBorder.all(),
+        columnWidths: const {0: FlexColumnWidth(2), 1: FlexColumnWidth(2), 2: FlexColumnWidth(2)},
+        children: [
+          _headerRow(const ['Self', 'Op Result', 'Others']),
+          for (int i = 0; i < rowCount && i < 12; i++)
+            TableRow(
+              children: [
+                _tableCell(_tapText(context, i < selfRows.length ? selfRows[i] : null)),
+                _tableCell(_tapText(context, i < rows.length ? rows[i] : null)),
+                _tableCell(_tapText(context, i < otherRows.length ? otherRows[i] : null)),
+              ],
             ),
-          ],
-        );
-      },
-    );
-  }
-
-  TableCell _tableCell(Widget child) {
-    return TableCell(
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: child,
+        ],
       ),
     );
   }
+}
+
+class PlanetXClueLogTable extends StatelessWidget {
+  const PlanetXClueLogTable({
+    super.key,
+    required this.rows,
+  });
+
+  final List<PlanetXLogEntry> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return _panel(
+      context: context,
+      title: 'ClueLog',
+      table: Table(
+        border: TableBorder.all(),
+        columnWidths: const {0: FlexColumnWidth(2), 1: FlexColumnWidth(3)},
+        children: [
+          _headerRow(const ['clue', 'detail']),
+          for (final row in rows.take(12))
+            TableRow(
+              children: [
+                _tableCell(Text('${row.type}: ${row.actor.isEmpty ? '-' : row.actor}')),
+                _tableCell(_tapText(context, row)),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class PlanetXMeetingLogTable extends StatelessWidget {
+  const PlanetXMeetingLogTable({
+    super.key,
+    required this.rows,
+  });
+
+  final List<PlanetXLogEntry> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return _panel(
+      context: context,
+      title: 'MeetingLog',
+      table: Table(
+        border: TableBorder.all(),
+        children: [
+          _headerRow(const ['meeting']),
+          for (final row in rows.take(12))
+            TableRow(
+              children: [
+                _tableCell(_tapText(context, row, prefixTime: true)),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+Widget _panel({
+  required BuildContext context,
+  required String title,
+  required Widget table,
+}) {
+  return Column(
+    children: [
+      Text(title, style: Theme.of(context).textTheme.titleMedium),
+      const SizedBox(height: 4),
+      Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          color: Theme.of(context).colorScheme.primaryContainer,
+        ),
+        child: table,
+      ),
+      const SizedBox(height: 4),
+    ],
+  );
+}
+
+TableRow _headerRow(List<String> cells) {
+  return TableRow(
+    children: [
+      for (final text in cells)
+        _tableCell(
+          Text(
+            text,
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+    ],
+  );
+}
+
+Widget _tapText(BuildContext context, PlanetXLogEntry? row, {bool prefixTime = false}) {
+  if (row == null) {
+    return const Text('');
+  }
+  final body = prefixTime ? '[${_formatTime(row.time)}] ${row.summary}' : row.summary;
+  return InkWell(
+    onTap: () => _showRaw(context, row),
+    child: Text(
+      body,
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+    ),
+  );
+}
+
+String _formatTime(DateTime dt) {
+  final hh = dt.hour.toString().padLeft(2, '0');
+  final mm = dt.minute.toString().padLeft(2, '0');
+  final ss = dt.second.toString().padLeft(2, '0');
+  return '$hh:$mm:$ss';
+}
+
+void _showRaw(BuildContext context, PlanetXLogEntry row) {
+  showDialog<void>(
+    context: context,
+    builder: (context) {
+      return AlertDialog(
+        title: Text('${row.type} raw'),
+        content: SingleChildScrollView(child: Text(row.raw)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+TableCell _tableCell(Widget child) {
+  return TableCell(
+    child: Padding(
+      padding: const EdgeInsets.all(8),
+      child: child,
+    ),
+  );
 }

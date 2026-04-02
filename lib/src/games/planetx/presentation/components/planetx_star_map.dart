@@ -54,7 +54,9 @@ class PlanetXStarMap extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final displaySectors = sectors.isEmpty ? List<String>.filled(12, 'space') : sectors;
+    final displaySectors = sectors.isEmpty
+        ? List<String>.filled(12, 'space')
+        : sectors.map(_normalizeSectorType).toList();
 
     return Container(
       decoration: BoxDecoration(
@@ -271,9 +273,11 @@ class PlanetXStarMap extends StatelessWidget {
                   ...List.generate(6, (slot) {
                     final centerDegree = each * s + each / 2 + rotationDegrees;
                     final radians = centerDegree * math.pi / 180;
+                    final rotation = -(radians + math.pi);
                     final buttonRadius = baseRadius + (radius - baseRadius) * (slot + 1) / 6.6;
                     final x = buttonRadius * math.cos(radians);
                     final y = buttonRadius * math.sin(radians);
+                    final showSlot = slot != 0 || _isPrime(s + 1);
 
                     final row = (s < sectorMarks.length) ? sectorMarks[s] : const <int>[];
                     final mark = (slot < row.length) ? row[slot] : 0;
@@ -281,13 +285,21 @@ class PlanetXStarMap extends StatelessWidget {
                     return Positioned(
                       left: size / 2 + x - 14,
                       top: size / 2 + y - 14,
-                      child: GestureDetector(
-                        onTap: () => onMarkTap(s, slot),
-                        child: _markSlot(
-                          sectorType: displaySectors[s],
-                          mark: mark,
-                          showType: slot == 0,
-                          emphasized: slot == 0,
+                      child: Transform.rotate(
+                        angle: rotation,
+                        child: GestureDetector(
+                          onTap: showSlot ? () => onMarkTap(s, slot) : null,
+                          child: showSlot
+                              ? Transform.rotate(
+                                  angle: -rotation,
+                                  child: _markSlot(
+                                    sectorType: _sectorTypeForSlot(slot),
+                                    mark: mark,
+                                    showType: true,
+                                    emphasized: slot == 0,
+                                  ),
+                                )
+                              : const SizedBox.shrink(),
                         ),
                       ),
                     );
@@ -391,6 +403,12 @@ class PlanetXStarMap extends StatelessWidget {
                     radius: radius,
                   ),
                 ),
+                ..._buildMeetingBackgroundMarkers(
+                  size: size,
+                  sectorCount: displaySectors.length,
+                  radius: radius,
+                  baseRadius: 36,
+                ),
                 ..._buildMeetingTokenDots(
                   size: size,
                   count: tokensCount,
@@ -469,9 +487,10 @@ class PlanetXStarMap extends StatelessWidget {
       return const <Widget>[];
     }
 
-    final each = 360.0 / count;
-    return List<Widget>.generate(count, (i) {
-      final degree = i * each + rotationDegrees;
+    const cardinalDegrees = <double>[-90, 0, 90, 180];
+    final visibleCount = math.min(count, cardinalDegrees.length);
+    return List<Widget>.generate(visibleCount, (i) {
+      final degree = cardinalDegrees[i] + rotationDegrees;
       final rad = degree * math.pi / 180;
       final x = ringRadius * math.cos(rad);
       final y = ringRadius * math.sin(rad);
@@ -489,6 +508,50 @@ class PlanetXStarMap extends StatelessWidget {
         ),
       );
     });
+  }
+
+  List<Widget> _buildMeetingBackgroundMarkers({
+    required double size,
+    required int sectorCount,
+    required double radius,
+    required double baseRadius,
+  }) {
+    if (sectorCount <= 0) {
+      return const <Widget>[];
+    }
+
+    const ringIconDefs = <(IconData, Color)>[
+      (Icons.autorenew_rounded, Colors.black87),
+      (Icons.crop_free, Colors.grey),
+      (Icons.crop_free, Colors.grey),
+      (Icons.add_box_outlined, Colors.blueGrey),
+    ];
+
+    final each = 360.0 / sectorCount;
+    final iconSize = math.max(12.0, size / 24);
+    final widgets = <Widget>[];
+
+    for (int sector = 0; sector < sectorCount; sector++) {
+      final centerDegree = each * sector + each / 2 + rotationDegrees;
+      final radians = centerDegree * math.pi / 180;
+
+      for (int ring = 0; ring < ringIconDefs.length; ring++) {
+        final ringRadius = baseRadius + (radius - baseRadius) * (ring + 1) / 4.6;
+        final x = ringRadius * math.cos(radians);
+        final y = ringRadius * math.sin(radians);
+        final (iconData, iconColor) = ringIconDefs[ring];
+
+        widgets.add(
+          Positioned(
+            left: size / 2 + x - iconSize / 2,
+            top: size / 2 + y - iconSize / 2,
+            child: Icon(iconData, size: iconSize, color: iconColor.withAlpha(180)),
+          ),
+        );
+      }
+    }
+
+    return widgets;
   }
 
   Widget _counterChip(BuildContext context, String label, int value) {
@@ -576,10 +639,10 @@ class PlanetXStarMap extends StatelessWidget {
                 child: Image.asset(
                   _sectorAssetPath(item),
                   fit: BoxFit.contain,
-                  errorBuilder: (context, error, stackTrace) => Container(
-                    decoration: BoxDecoration(
-                      color: _sectorColor(item),
-                      shape: BoxShape.circle,
+                  errorBuilder: (context, error, stackTrace) => Center(
+                    child: Text(
+                      _sectorShortLabel(item).substring(0, 1),
+                      style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w700),
                     ),
                   ),
                 ),
@@ -591,7 +654,7 @@ class PlanetXStarMap extends StatelessWidget {
   }
 
   Color _sectorColor(String sector) {
-    switch (sector) {
+    switch (_normalizeSectorType(sector)) {
       case 'comet':
         return const Color(0xFFE3F2FD);
       case 'asteroid':
@@ -609,7 +672,7 @@ class PlanetXStarMap extends StatelessWidget {
   }
 
   String _sectorShortLabel(String sector) {
-    switch (sector) {
+    switch (_normalizeSectorType(sector)) {
       case 'comet':
         return 'Comet';
       case 'asteroid':
@@ -627,7 +690,7 @@ class PlanetXStarMap extends StatelessWidget {
   }
 
   String _sectorAssetPath(String sector) {
-    switch (sector) {
+    switch (_normalizeSectorType(sector)) {
       case 'comet':
         return 'assets/icons/comet.png';
       case 'asteroid':
@@ -642,6 +705,81 @@ class PlanetXStarMap extends StatelessWidget {
       default:
         return 'assets/icons/bracket.png';
     }
+  }
+
+  String _sectorTypeForSlot(int slotIndex) {
+    switch (slotIndex) {
+      case 0:
+        return 'comet';
+      case 1:
+        return 'asteroid';
+      case 2:
+        return 'dwarf_planet';
+      case 3:
+        return 'nebula';
+      case 4:
+        return 'space';
+      case 5:
+      default:
+        return 'x';
+    }
+  }
+
+  String _normalizeSectorType(String raw) {
+    final compact = raw.trim().toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    switch (compact) {
+      case '0':
+        return 'comet';
+      case '1':
+        return 'asteroid';
+      case '2':
+        return 'dwarf_planet';
+      case '3':
+        return 'nebula';
+      case '4':
+        return 'space';
+      case '5':
+        return 'x';
+    }
+    if (compact == 'x' || compact == 'planetx' || compact.endsWith('x')) {
+      return 'x';
+    }
+    if (compact.contains('dwarf') && compact.contains('planet')) {
+      return 'dwarf_planet';
+    }
+    if (compact.contains('asteroid')) {
+      return 'asteroid';
+    }
+    if (compact.contains('comet')) {
+      return 'comet';
+    }
+    if (compact.contains('nebula')) {
+      return 'nebula';
+    }
+    if (compact.contains('space') || compact.contains('empty')) {
+      return 'space';
+    }
+    return 'space';
+  }
+
+  bool _isPrime(int n) {
+    if (n <= 1) {
+      return false;
+    }
+    if (n <= 3) {
+      return true;
+    }
+    if (n % 2 == 0 || n % 3 == 0) {
+      return false;
+    }
+    var i = 5;
+    while (i * i <= n) {
+      if (n % i == 0 || n % (i + 2) == 0) {
+        return false;
+      }
+      i += 6;
+    }
+    return true;
   }
 }
 

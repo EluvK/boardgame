@@ -101,17 +101,17 @@ class PlanetXGameResult extends StatelessWidget {
         child: Table(
           border: TableBorder.all(color: Colors.grey.shade400),
           children: [
-            const TableRow(
+            TableRow(
               children: [
-                _CellText('name'),
-                _CellText('first'),
-                _CellText('asteroid'),
-                _CellText('comet'),
-                _CellText('dwarf'),
-                _CellText('nebula'),
-                _CellText('x'),
-                _CellText('sum'),
-                _CellText('step'),
+                _CellText('name', bold: true),
+                _CellText('first', bold: true),
+                const _HeaderIconText(asset: 'assets/icons/asteroid.png', label: 'asteroid'),
+                const _HeaderIconText(asset: 'assets/icons/comet.png', label: 'comet'),
+                const _HeaderIconText(asset: 'assets/icons/dwarf_planet.png', label: 'dwarf'),
+                const _HeaderIconText(asset: 'assets/icons/nebula.png', label: 'nebula'),
+                const _HeaderIconText(asset: 'assets/icons/x.png', label: 'x'),
+                _CellText('sum', bold: true),
+                _CellText('step', bold: true),
               ],
             ),
             for (final row in gameResult)
@@ -137,15 +137,52 @@ class PlanetXGameResult extends StatelessWidget {
 }
 
 class _CellText extends StatelessWidget {
-  const _CellText(this.text);
+  const _CellText(this.text, {this.bold = false});
 
   final String text;
+  final bool bold;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.all(8),
-      child: Text(text),
+      child: Text(
+        text,
+        style: TextStyle(fontWeight: bold ? FontWeight.w700 : FontWeight.w400),
+      ),
+    );
+  }
+}
+
+class _HeaderIconText extends StatelessWidget {
+  const _HeaderIconText({
+    required this.asset,
+    required this.label,
+  });
+
+  final String asset;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(8),
+      child: Wrap(
+        spacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Image.asset(
+            asset,
+            width: 18,
+            height: 18,
+            errorBuilder: (context, error, stackTrace) => const Icon(Icons.circle, size: 14),
+          ),
+          Text(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
     );
   }
 }

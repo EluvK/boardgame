@@ -103,16 +103,6 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
         final prevStarted = _roomStarted;
         setState(() {
           _applyReadyPayload(_asMap(readyStateRaw));
-          _appendLimited(
-            _meetingLog,
-            PlanetXLogEntry(
-              time: DateTime.now(),
-              type: 'ready',
-              actor: payload['user']?.toString() ?? '',
-              summary: 'ready=$_readyCount/$_playerCount',
-              raw: jsonEncode(payload),
-            ),
-          );
         });
 
         // If room just entered started state, force a sync to avoid stale UI.
@@ -135,18 +125,6 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
         _roomStarted = _latestState?.state['started'] == true;
         _ensureMarkBuffer();
         _latestHint = _latestState?.event ?? '';
-        if (_latestHint.isNotEmpty) {
-          _appendLimited(
-            _meetingLog,
-            PlanetXLogEntry(
-              time: DateTime.now(),
-              type: 'state',
-              actor: payload['by']?.toString() ?? '',
-              summary: _latestHint,
-              raw: jsonEncode(payload),
-            ),
-          );
-        }
         _appendLimited(
           _logs,
           PlanetXLogEntry(
@@ -193,6 +171,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
         }
         if (type == 'planetx_op_result') {
           final result = _asMap(payload['result']);
+          final hasMeetingPublish = result.containsKey('ready_publish') || result.containsKey('do_publish');
           _appendLimited(
             _opLog,
             PlanetXLogEntry(
@@ -203,6 +182,18 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
               raw: jsonEncode(payload),
             ),
           );
+          if (hasMeetingPublish) {
+            _appendLimited(
+              _meetingLog,
+              PlanetXLogEntry(
+                time: DateTime.now(),
+                type: 'conference',
+                actor: payload['by']?.toString() ?? widget.session.userId,
+                summary: _summarizeOperationResult(result),
+                raw: jsonEncode(payload),
+              ),
+            );
+          }
           if (result.containsKey('research')) {
             _appendLimited(
               _clueLog,
@@ -341,6 +332,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     final stateMap = _latestState?.state ?? <String, dynamic>{};
     final players = _asStringList(stateMap['players']);
     final sectors = _asStringList(stateMap['map_sectors']);
+    final gameStage = stateMap['game_stage']?.toString() ?? '';
     final mapSize = _asInt(stateMap['map_type'] == 'expert' ? 18 : 12);
     final publishableTypes = _publishableTypes(stateMap);
     final availableSectorTypes = _availableSectorTypes(sectors, publishableTypes);
@@ -383,6 +375,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
               padding: const EdgeInsets.only(bottom: 4),
               child: PlanetXOpBar(
                 busy: _busy,
+                gameStage: gameStage,
                 mapSize: mapSize,
                 sectorTypes: availableSectorTypes,
                 publishableTypes: publishableTypes,
@@ -462,7 +455,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
                     rotationDegrees: _mapRotationDegrees,
                     onRotateCenter: () {
                       setState(() {
-                        _mapRotationDegrees = (_mapRotationDegrees + 30) % 360;
+                        _mapRotationDegrees = (_mapRotationDegrees + 90) % 360;
                       });
                       _persistUiState();
                     },
@@ -502,6 +495,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
                   ),
                 );
                 final logsPanel = PlanetXLogsPanel(
+                  currentUserId: widget.session.userId,
                   opLog: _opLog,
                   clueLog: _clueLog,
                   meetingLog: _meetingLog,
