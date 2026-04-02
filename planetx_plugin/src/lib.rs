@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 
 use crate::map::{ClueGenerator, Map, Sector, Sectors, SectorType};
 use crate::model::PlanetXStage;
-use crate::operation::{Operation, OperationResult};
+use crate::operation::{Operation, OperationResult, ResearchOperation};
 use crate::recommendation::{RecommendOperation, RecommendOperationResult};
 
 pub use model::PlanetXState;
@@ -70,7 +70,13 @@ impl PlanetXGame {
                 .player_results
                 .get(user_id)
                 .and_then(|v| v.last())
-                .is_some_and(|last| matches!(last, OperationResult::Research(_)))
+                .is_some_and(|last| {
+                    matches!(
+                        last,
+                        OperationResult::Research(clue)
+                            if !matches!(clue.index, crate::map::ClueEnum::X1 | crate::map::ClueEnum::X2)
+                    )
+                })
         {
             return Err(game::GameError::Invalid(
                 "planetx_research_continuously".into(),
@@ -182,6 +188,7 @@ impl PlanetXGame {
             }
         };
 
+        let previous_step = state.player_steps.get(user_id).copied().unwrap_or(0);
         let op_cost = Self::operation_cost(op, state.map_type.sector_count());
         if op_cost > 0 {
             let step = state.player_steps.entry(user_id.to_string()).or_insert(0);
@@ -197,6 +204,10 @@ impl PlanetXGame {
             filter.add_operation(op.clone(), result.clone());
         }
 
+        if matches!(state.game_stage, PlanetXStage::UserMove) {
+            Self::unlock_x_clues_on_pass(state, previous_step, op_cost);
+        }
+
         match state.game_stage {
             PlanetXStage::UserMove => {
                 if Self::should_enter_last_move(&result) {
@@ -210,7 +221,7 @@ impl PlanetXGame {
                     } else {
                         Self::finalize_game(state, &map);
                     }
-                } else if Self::is_meeting_triggered(state, user_id) {
+                } else if Self::is_meeting_triggered(state, previous_step, op_cost) {
                     state.game_stage = PlanetXStage::MeetingProposal;
                     state.meeting_ready_users.clear();
                     state.meeting_published_users.clear();
@@ -299,17 +310,91 @@ impl PlanetXGame {
         }
     }
 
-    fn is_meeting_triggered(state: &PlanetXState, user_id: &str) -> bool {
-        let Some(step) = state.player_steps.get(user_id).copied() else {
+    fn is_meeting_triggered(state: &PlanetXState, previous_step: usize, op_cost: usize) -> bool {
+        if op_cost == 0 {
             return false;
-        };
+        }
         let max = state.map_type.sector_count();
-        let position = (step % max) + 1;
-        state
+        let meeting_points = state
             .map_type
             .meeting_points()
-            .iter()
-            .any(|(idx, _)| *idx == position)
+            .into_iter()
+            .map(|(idx, _)| idx)
+            .collect::<Vec<_>>();
+        Self::crossed_points(previous_step, op_cost, max)
+            .into_iter()
+            .any(|p| meeting_points.contains(&p))
+    }
+
+    fn crossed_points(previous_step: usize, delta: usize, max: usize) -> Vec<usize> {
+        if delta == 0 || max == 0 {
+            return vec![];
+        }
+        (1..=delta)
+            .map(|i| {
+                let abs = previous_step + i;
+                ((abs - 1) % max) + 1
+            })
+            .collect()
+    }
+
+    fn unlock_x_clues_on_pass(state: &mut PlanetXState, previous_step: usize, op_cost: usize) {
+        if op_cost == 0 {
+            return;
+        }
+
+        // Legacy behavior: X clues are unlocked only during the first lap.
+        let max = state.map_type.sector_count();
+        if previous_step >= max {
+            return;
+        }
+
+        let mut newly_unlocked = Vec::new();
+        for i in 1..=op_cost {
+            let abs = previous_step + i;
+            if abs > max {
+                break;
+            }
+            let pos = ((abs - 1) % max) + 1;
+            let x_point_index = state
+                .map_type
+                .xclue_points()
+                .iter()
+                .position(|(idx, _)| *idx == pos);
+            let Some(x_idx) = x_point_index else {
+                continue;
+            };
+            let Some(clue) = state.x_clues.get(x_idx).cloned() else {
+                continue;
+            };
+            if state.revealed_x_clues.iter().any(|c| *c == clue.index) {
+                continue;
+            }
+            newly_unlocked.push(clue);
+        }
+
+        if newly_unlocked.is_empty() {
+            return;
+        }
+
+        for clue in newly_unlocked {
+            state.revealed_x_clues.push(clue.index.clone());
+            let op = Operation::Research(ResearchOperation {
+                index: clue.index.clone(),
+            });
+            let result = OperationResult::Research(clue.clone());
+
+            for uid in state.turn_order.clone() {
+                state
+                    .player_results
+                    .entry(uid.clone())
+                    .or_default()
+                    .push(result.clone());
+                if let Some(filter) = state.choice_filters.get_mut(&uid) {
+                    filter.add_operation(op.clone(), result.clone());
+                }
+            }
+        }
     }
 
     fn in_visible_range(start_index: usize, end_index: usize, index: usize, max: usize) -> bool {
@@ -631,7 +716,7 @@ impl Game for PlanetXGame {
             .collect();
 
         let mut clue_gen = ClueGenerator::new(s.map_seed, generated_map.sectors.clone(), s.map_type.clone());
-        let (research_clues, _x_clues) = match clue_gen.generate_clues() {
+        let (research_clues, x_clues) = match clue_gen.generate_clues() {
             Ok(v) => v,
             Err(_) => {
                 return ActionResult::Err(game::GameError::Internal(
@@ -640,6 +725,8 @@ impl Game for PlanetXGame {
             }
         };
         s.research_clues = research_clues;
+        s.x_clues = x_clues;
+        s.revealed_x_clues.clear();
         s.game_stage = PlanetXStage::UserMove;
         s.start_index = 1;
         s.end_index = s.map_type.sector_count() / 2;
@@ -833,9 +920,10 @@ impl Game for PlanetXGame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::map::{MapType, SectorType};
+    use crate::map::{Clue, ClueConnection, ClueEnum, MapType, SectorType};
     use crate::operation::{
-        DoPublishOperation, LocateOperation, Operation, ReadyPublishOperation, TargetOperation,
+        DoPublishOperation, LocateOperation, Operation, ReadyPublishOperation, SurveyOperation,
+        TargetOperation,
     };
 
     fn standard_test_map() -> Vec<SectorType> {
@@ -976,5 +1064,92 @@ mod tests {
             blocked,
             Err(game::GameError::Invalid(msg)) if msg == "planetx_invalid_move_in_stage"
         ));
+    }
+
+    #[test]
+    fn crossing_meeting_point_triggers_meeting() {
+        let mut s = base_state(&["alice", "bob"]);
+        s.player_steps.insert("alice".into(), 2);
+        s.player_steps.insert("bob".into(), 0);
+
+        PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "alice",
+            &Operation::Target(TargetOperation { index: 1 }),
+        )
+        .expect("target should succeed");
+
+        assert_eq!(s.game_stage, PlanetXStage::MeetingProposal);
+        assert!(s.meeting_ready_users.is_empty());
+        assert!(s.meeting_published_users.is_empty());
+    }
+
+    #[test]
+    fn crossing_x_point_unlocks_x_clue_for_all_players() {
+        let mut s = base_state(&["alice", "bob"]);
+        s.x_clues = vec![Clue {
+            index: ClueEnum::X1,
+            subject: SectorType::X,
+            object: SectorType::Comet,
+            conn: ClueConnection::NotAdjacent,
+        }];
+        s.player_steps.insert("alice".into(), 8);
+        s.player_steps.insert("bob".into(), 1);
+
+        PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "alice",
+            &Operation::Target(TargetOperation { index: 1 }),
+        )
+        .expect("target should succeed");
+
+        assert_eq!(s.revealed_x_clues, vec![ClueEnum::X1]);
+        let alice_results = s.player_results.get("alice").cloned().unwrap_or_default();
+        let bob_results = s.player_results.get("bob").cloned().unwrap_or_default();
+        assert!(alice_results
+            .iter()
+            .any(|r| matches!(r, OperationResult::Research(Clue { index: ClueEnum::X1, .. }))));
+        assert!(bob_results
+            .iter()
+            .any(|r| matches!(r, OperationResult::Research(Clue { index: ClueEnum::X1, .. }))));
+    }
+
+    #[test]
+    fn x_clue_unlock_does_not_block_manual_research() {
+        let mut s = base_state(&["alice", "bob"]);
+        s.x_clues = vec![Clue {
+            index: ClueEnum::X1,
+            subject: SectorType::X,
+            object: SectorType::Comet,
+            conn: ClueConnection::NotAdjacent,
+        }];
+        s.research_clues = vec![Clue {
+            index: ClueEnum::A,
+            subject: SectorType::Comet,
+            object: SectorType::Asteroid,
+            conn: ClueConnection::NotAdjacent,
+        }];
+        s.player_steps.insert("alice".into(), 9);
+        s.player_steps.insert("bob".into(), 1);
+
+        PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "alice",
+            &Operation::Survey(SurveyOperation {
+                sector_type: SectorType::Space,
+                start: 1,
+                end: 12,
+            }),
+        )
+        .expect("survey should succeed and unlock x clue");
+
+        let res = PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "bob",
+            &Operation::Research(ResearchOperation { index: ClueEnum::A }),
+        )
+        .expect("manual research should still be allowed after x clue unlock");
+
+        assert!(matches!(res, OperationResult::Research(Clue { index: ClueEnum::A, .. })));
     }
 }

@@ -3,5 +3,9 @@
         "cargo check": true,
         "cargo test": true,
         "flutter analyze": true
-    }
+    },
+    "cSpell.words": [
+        "planetx",
+        "xclue"
+    ]
 }

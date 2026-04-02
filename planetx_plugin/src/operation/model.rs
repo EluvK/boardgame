@@ -5,7 +5,7 @@ use crate::map::{Clue, ClueEnum, SectorType};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Operation {
-    Survey(SurveyOperatoin),
+    Survey(SurveyOperation),
     Target(TargetOperation),
     Research(ResearchOperation),
     Locate(LocateOperation),
@@ -14,7 +14,7 @@ pub enum Operation {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SurveyOperatoin {
+pub struct SurveyOperation {
     pub sector_type: SectorType,
     pub start: usize,
     pub end: usize,
@@ -70,7 +70,7 @@ mod tests {
 
     #[test]
     fn test_operation_json() {
-        let survey = Operation::Survey(SurveyOperatoin {
+        let survey = Operation::Survey(SurveyOperation {
             sector_type: SectorType::Space,
             start: 1,
             end: 2,

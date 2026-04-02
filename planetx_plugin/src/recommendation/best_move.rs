@@ -2,7 +2,7 @@ use crate::{
     map::{ChoiceFilter, Clue, ClueConnection, ClueEnum, MapType, SectorType, Token},
     model::{GameStage, UserState},
     operation::{
-        DoPublishOperation, Operation, ReadyPublishOperation, ResearchOperation, SurveyOperatoin,
+        DoPublishOperation, Operation, ReadyPublishOperation, ResearchOperation, SurveyOperation,
         TargetOperation,
     },
 };
@@ -210,7 +210,7 @@ fn map_candidate_operations(
                         || (is_prime(start.as_usize()) && is_prime(end.as_usize()))
                 })
                 .map(|((start, end), sector_type)| {
-                    let op = SurveyOperatoin {
+                    let op = SurveyOperation {
                         start: start.as_usize(),
                         end: end.as_usize(),
                         sector_type: sector_type.clone(),

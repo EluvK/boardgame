@@ -4,7 +4,7 @@ use itertools::Itertools;
 use tracing::info;
 
 use crate::operation::{
-    LocateOperation, Operation, OperationResult, ResearchOperation, SurveyOperatoin,
+    LocateOperation, Operation, OperationResult, ResearchOperation, SurveyOperation,
     TargetOperation,
 };
 
@@ -127,7 +127,7 @@ impl ChoiceFilter {
     fn filter_op(ss: &Sectors, op: &Operation, opr: &OperationResult) -> bool {
         match (op, opr) {
             (
-                Operation::Survey(SurveyOperatoin {
+                Operation::Survey(SurveyOperation {
                     sector_type,
                     start,
                     end,
@@ -284,7 +284,7 @@ impl ChoiceFilter {
         }
     }
 
-    pub fn effect_survey(&self, survey: &SurveyOperatoin) -> f64 {
+    pub fn effect_survey(&self, survey: &SurveyOperation) -> f64 {
         // if not initialized, return 0
         if !self.initialized {
             return 0.0;
@@ -415,7 +415,7 @@ mod tests {
         macro_rules! survey {
             ($t:expr, $start:expr, $end:expr, $cnt:expr) => {
                 cf.add_operation(
-                    Operation::Survey(SurveyOperatoin {
+                    Operation::Survey(SurveyOperation {
                         sector_type: $t,
                         start: $start,
                         end: $end,
@@ -429,7 +429,7 @@ mod tests {
         survey!(SectorType::Comet, 3, 11, 1);
         survey!(SectorType::DwarfPlanet, 5, 13, 4);
         survey!(SectorType::Comet, 7, 13, 1);
-        let r = cf.effect_survey(&SurveyOperatoin {
+        let r = cf.effect_survey(&SurveyOperation {
             sector_type: SectorType::Asteroid,
             start: 9,
             end: 17,

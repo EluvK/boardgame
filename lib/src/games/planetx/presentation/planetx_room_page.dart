@@ -869,6 +869,21 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
       }
     }
 
+    final xClues = stateMap['x_clues'];
+    if (xClues is List) {
+      for (final raw in xClues) {
+        if (raw is! Map) {
+          continue;
+        }
+        final clue = _asMap(raw);
+        final idx = _normalizeClueIndex(clue['index']);
+        if (idx.isEmpty) {
+          continue;
+        }
+        _clueSecretsByIndex[idx] = _formatClueSecret(clue);
+      }
+    }
+
     final resultsByUser = _asMap(stateMap['player_results']);
     final myResults = resultsByUser[userId];
     if (myResults is List) {

@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    map::{ChoiceFilter, Clue, ClueSecret, Map, MapType, SecretToken, SectorType, Token},
+    map::{
+        ChoiceFilter, Clue, ClueEnum, ClueSecret, Map, MapType, SecretToken, SectorType, Token,
+    },
     operation::{Operation, OperationResult},
 };
 
@@ -21,6 +23,10 @@ pub struct PlanetXState {
     pub game_stage: PlanetXStage,
     pub map_sectors: Vec<SectorType>,
     pub research_clues: Vec<Clue>,
+    #[serde(default)]
+    pub x_clues: Vec<Clue>,
+    #[serde(default)]
+    pub revealed_x_clues: Vec<ClueEnum>,
     pub turn_order: Vec<String>,
     pub turn_index: usize,
     // Inclusive visible-sector window [start_index, end_index] with wrap-around.
@@ -60,6 +66,8 @@ impl PlanetXState {
             game_stage: PlanetXStage::UserMove,
             map_sectors: vec![],
             research_clues: vec![],
+            x_clues: vec![],
+            revealed_x_clues: vec![],
             turn_order: vec![],
             turn_index: 0,
             start_index: 1,
