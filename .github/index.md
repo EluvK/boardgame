@@ -2,7 +2,7 @@
 
 本目录用于保存项目协作文档。为减少重复和过期信息，按“长期维护”与“历史归档”区分。
 
-最后整理时间：2026-03-25
+最后整理时间：2026-04-02
 
 ## 文档状态总览
 
@@ -12,18 +12,22 @@
 | guides/acquire-implementation-checklist.zh-CN.md | 持续维护 | 服务端实现进度主清单 | 研发完成后及时勾选与补注 |
 | guides/acquire-client-server-protocol.zh-CN.md | 持续维护 | 前后端协议单一参考 | 协议字段/事件变更时同步更新版本 |
 | guides/acquire-client-architecture.zh-CN.md | 持续维护 | Flutter 客户端分层与目录约束 | 架构调整时同步更新 |
+| guides/development-guide.zh-CN.md | 持续维护 | 项目开发总览（模块边界、流程、验收基线） | 结构、流程、约束变化时同步更新 |
+| copilot-instructions.md | 持续维护 | 仓库级 AI 协作固定约束 | 约束策略变化时同步更新 |
 | guides/planetx-migration-plan.zh-CN.md | 持续维护 | Planet X 并入当前架构的分阶段迁移执行手册 | 每个里程碑完成后更新勾选与结论 |
-| guides/acquire-handoff-2026-03-20.zh-CN.md | 历史归档 | 会话交接快照 | 只读，不作为当前待办来源 |
-| guides/acquire-status-2026-03-23.zh-CN.md | 历史归档 | 2026-03-23 阶段状态与回归清单快照 | 只读，不作为当前待办来源 |
+| guides/planetx-current-gap-analysis-2026-04-02.zh-CN.md | 持续维护 | PlanetX 当前实现与 ref 差距对照及迭代清单 | PlanetX 迁移阶段变更时同步更新 |
 | prompts/plan-boardgame.prompt.md | 持续维护 | 跨游戏长期目标说明 | 目标阶段变化时更新 |
 
 ## 日常阅读顺序（推荐）
 
 1. guides/acquire-rulebook.zh-CN.md
 2. guides/acquire-implementation-checklist.zh-CN.md
-3. guides/acquire-client-server-protocol.zh-CN.md
-4. guides/acquire-client-architecture.zh-CN.md
-5. guides/planetx-migration-plan.zh-CN.md
+3. guides/development-guide.zh-CN.md
+4. copilot-instructions.md
+5. guides/acquire-client-server-protocol.zh-CN.md
+6. guides/acquire-client-architecture.zh-CN.md
+7. guides/planetx-migration-plan.zh-CN.md
+8. guides/planetx-current-gap-analysis-2026-04-02.zh-CN.md
 
 ## 维护约定
 
