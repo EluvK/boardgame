@@ -17,14 +17,31 @@ pub struct PlanetXState {
     pub last_payload: Option<Value>,
     pub map_seed: u64,
     pub map_type: MapType,
+    #[serde(default = "default_game_stage")]
+    pub game_stage: PlanetXStage,
     pub map_sectors: Vec<SectorType>,
     pub research_clues: Vec<Clue>,
     pub turn_order: Vec<String>,
     pub turn_index: usize,
+    // Inclusive visible-sector window [start_index, end_index] with wrap-around.
+    #[serde(default = "default_visible_start_index")]
+    pub start_index: usize,
+    #[serde(default = "default_visible_end_index")]
+    pub end_index: usize,
+    #[serde(default)]
+    pub meeting_ready_users: Vec<String>,
+    #[serde(default)]
+    pub meeting_published_users: Vec<String>,
+    #[serde(default)]
+    pub last_move_users: Vec<String>,
+    #[serde(default)]
+    pub terminator_step: usize,
     pub player_steps: HashMap<String, usize>,
     pub player_target_uses: HashMap<String, usize>,
     pub user_tokens: HashMap<String, Vec<Token>>,
     pub revealed_sector_indexes: Vec<usize>,
+    #[serde(default)]
+    pub game_result: Option<Vec<UserResultSummary>>,
     #[serde(skip, default)]
     pub choice_filters: HashMap<String, ChoiceFilter>,
     pub player_results: HashMap<String, Vec<OperationResult>>,
@@ -40,14 +57,22 @@ impl PlanetXState {
             last_payload: None,
             map_seed: rand::random::<u32>() as u64,
             map_type: MapType::Standard,
+            game_stage: PlanetXStage::UserMove,
             map_sectors: vec![],
             research_clues: vec![],
             turn_order: vec![],
             turn_index: 0,
+            start_index: 1,
+            end_index: 6,
+            meeting_ready_users: vec![],
+            meeting_published_users: vec![],
+            last_move_users: vec![],
+            terminator_step: 0,
             player_steps: HashMap::new(),
             player_target_uses: HashMap::new(),
             user_tokens: HashMap::new(),
             revealed_sector_indexes: vec![],
+            game_result: None,
             choice_filters: HashMap::new(),
             player_results: HashMap::new(),
         }
@@ -69,6 +94,46 @@ impl PlanetXState {
         }
         self.turn_index = (self.turn_index + 1) % self.turn_order.len();
     }
+
+    pub fn recompute_visible_range(&mut self) {
+        let total = self.map_type.sector_count();
+        let span = total / 2;
+
+        let anchor_step = self
+            .current_player()
+            .and_then(|uid| self.player_steps.get(uid).copied())
+            .unwrap_or(0);
+        let start = (anchor_step % total) + 1;
+        let mut end = start + span - 1;
+        if end > total {
+            end -= total;
+        }
+
+        self.start_index = start;
+        self.end_index = end;
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanetXStage {
+    UserMove,
+    MeetingProposal,
+    MeetingPublish,
+    LastMove,
+    GameEnd,
+}
+
+const fn default_visible_start_index() -> usize {
+    1
+}
+
+const fn default_visible_end_index() -> usize {
+    6
+}
+
+const fn default_game_stage() -> PlanetXStage {
+    PlanetXStage::UserMove
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

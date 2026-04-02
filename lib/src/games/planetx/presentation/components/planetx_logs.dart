@@ -7,6 +7,7 @@ class PlanetXLogEntry {
     required this.actor,
     required this.summary,
     required this.raw,
+    this.category = '',
   });
 
   final DateTime time;
@@ -14,6 +15,7 @@ class PlanetXLogEntry {
   final String actor;
   final String summary;
   final String raw;
+  final String category;
 }
 
 class PlanetXClueEntry {
@@ -68,9 +70,30 @@ class PlanetXOpLogTable extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final selfRows = rows.where((e) => e.actor == currentUserId).toList();
-    final otherRows = rows.where((e) => e.actor != currentUserId).toList();
-    final rowCount = [selfRows.length, otherRows.length, rows.length].reduce((a, b) => a > b ? a : b);
+    final selfOpRows = rows.where((e) => e.category == 'self_op').toList().reversed.toList();
+    final selfResultRows = rows.where((e) => e.category == 'self_result').toList().reversed.toList();
+    final otherOpRows = rows.where((e) => e.category == 'other_op').toList().reversed.toList();
+
+    final fallbackResultRows = rows
+        .where((e) => e.category.isEmpty && e.actor == currentUserId)
+      .toList()
+      .reversed
+      .toList();
+    if (selfResultRows.isEmpty && fallbackResultRows.isNotEmpty) {
+      selfResultRows.addAll(fallbackResultRows);
+    }
+
+    final fallbackOtherRows = rows
+      .where((e) => e.category.isEmpty && e.actor != currentUserId)
+      .toList()
+      .reversed
+      .toList();
+    if (otherOpRows.isEmpty && fallbackOtherRows.isNotEmpty) {
+      otherOpRows.addAll(fallbackOtherRows);
+    }
+
+    final rowCount = [selfOpRows.length, selfResultRows.length, otherOpRows.length]
+        .reduce((a, b) => a > b ? a : b);
 
     return _panel(
       context: context,
@@ -79,13 +102,13 @@ class PlanetXOpLogTable extends StatelessWidget {
         border: TableBorder.all(),
         columnWidths: const {0: FlexColumnWidth(2), 1: FlexColumnWidth(2), 2: FlexColumnWidth(2)},
         children: [
-          _headerRow(const ['Self', 'Op Result', 'Others']),
+          _headerRow(const ['Self Op', 'Self Result', 'Others Op']),
           for (int i = 0; i < rowCount && i < 12; i++)
             TableRow(
               children: [
-                _tableCell(_tapText(context, i < selfRows.length ? selfRows[i] : null)),
-                _tableCell(_tapText(context, i < rows.length ? rows[i] : null)),
-                _tableCell(_tapText(context, i < otherRows.length ? otherRows[i] : null)),
+                _tableCell(_tapText(context, i < selfOpRows.length ? selfOpRows[i] : null)),
+                _tableCell(_tapText(context, i < selfResultRows.length ? selfResultRows[i] : null)),
+                _tableCell(_tapText(context, i < otherOpRows.length ? otherOpRows[i] : null)),
               ],
             ),
         ],

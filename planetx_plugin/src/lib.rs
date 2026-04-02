@@ -14,6 +14,7 @@ use rand::SeedableRng;
 use serde_json::{Value, json};
 
 use crate::map::{ClueGenerator, Map, Sector, Sectors, SectorType};
+use crate::model::PlanetXStage;
 use crate::operation::{Operation, OperationResult};
 use crate::recommendation::{RecommendOperation, RecommendOperationResult};
 
@@ -60,6 +61,22 @@ impl PlanetXGame {
             return Err(game::GameError::Invalid("planetx_not_current_player".into()));
         }
 
+        if !Self::op_allowed_in_stage(&state.game_stage, op) {
+            return Err(game::GameError::Invalid("planetx_invalid_move_in_stage".into()));
+        }
+
+        if matches!(op, Operation::Research(_))
+            && state
+                .player_results
+                .get(user_id)
+                .and_then(|v| v.last())
+                .is_some_and(|last| matches!(last, OperationResult::Research(_)))
+        {
+            return Err(game::GameError::Invalid(
+                "planetx_research_continuously".into(),
+            ));
+        }
+
         let map = Self::build_runtime_map(state)?;
 
         let result = match op {
@@ -71,12 +88,20 @@ impl PlanetXGame {
                 if s.start == 0 || s.start > max || s.end == 0 || s.end > max {
                     return Err(game::GameError::Invalid("planetx_invalid_index".into()));
                 }
+                if !Self::in_visible_range(state.start_index, state.end_index, s.start, max)
+                    || !Self::in_visible_range(state.start_index, state.end_index, s.end, max)
+                {
+                    return Err(game::GameError::Invalid("planetx_invalid_index".into()));
+                }
                 let cnt = map.survey_sector(s.start, s.end, &s.sector_type);
                 OperationResult::Survey(cnt)
             }
             Operation::Target(t) => {
                 let max = state.map_type.sector_count();
                 if t.index == 0 || t.index > max {
+                    return Err(game::GameError::Invalid("planetx_invalid_index".into()));
+                }
+                if !Self::in_visible_range(state.start_index, state.end_index, t.index, max) {
                     return Err(game::GameError::Invalid("planetx_invalid_index".into()));
                 }
                 let used = state.player_target_uses.entry(user_id.to_string()).or_insert(0);
@@ -157,8 +182,11 @@ impl PlanetXGame {
             }
         };
 
-        let step = state.player_steps.entry(user_id.to_string()).or_insert(0);
-        *step += 1;
+        let op_cost = Self::operation_cost(op, state.map_type.sector_count());
+        if op_cost > 0 {
+            let step = state.player_steps.entry(user_id.to_string()).or_insert(0);
+            *step += op_cost;
+        }
         state
             .player_results
             .entry(user_id.to_string())
@@ -169,9 +197,321 @@ impl PlanetXGame {
             filter.add_operation(op.clone(), result.clone());
         }
 
-        state.advance_turn();
+        match state.game_stage {
+            PlanetXStage::UserMove => {
+                if Self::should_enter_last_move(&result) {
+                    state.game_stage = PlanetXStage::LastMove;
+                    state.terminator_step = state.player_steps.get(user_id).copied().unwrap_or(0);
+                    state.last_move_users = Self::build_last_move_users(state, user_id);
+                    if let Some(next_uid) = state.last_move_users.first().cloned() {
+                        if let Some(idx) = state.turn_order.iter().position(|u| u == &next_uid) {
+                            state.turn_index = idx;
+                        }
+                    } else {
+                        Self::finalize_game(state, &map);
+                    }
+                } else if Self::is_meeting_triggered(state, user_id) {
+                    state.game_stage = PlanetXStage::MeetingProposal;
+                    state.meeting_ready_users.clear();
+                    state.meeting_published_users.clear();
+                } else {
+                    state.advance_turn();
+                    state.recompute_visible_range();
+                }
+            }
+            PlanetXStage::LastMove => {
+                state.last_move_users.retain(|u| u != user_id);
+                if let Some(next_uid) = state.last_move_users.first().cloned() {
+                    if let Some(idx) = state.turn_order.iter().position(|u| u == &next_uid) {
+                        state.turn_index = idx;
+                    }
+                } else {
+                    Self::finalize_game(state, &map);
+                }
+            }
+            PlanetXStage::MeetingProposal => {
+                if !state.meeting_ready_users.iter().any(|u| u == user_id) {
+                    state.meeting_ready_users.push(user_id.to_string());
+                }
+
+                if state.meeting_ready_users.len() >= state.turn_order.len() {
+                    state.game_stage = PlanetXStage::MeetingPublish;
+                    state.meeting_published_users.clear();
+                    state.turn_index = 0;
+                } else {
+                    state.advance_turn();
+                }
+            }
+            PlanetXStage::MeetingPublish => {
+                if !state.meeting_published_users.iter().any(|u| u == user_id) {
+                    state.meeting_published_users.push(user_id.to_string());
+                }
+
+                if state.meeting_published_users.len() >= state.turn_order.len() {
+                    Self::resolve_meeting_checks(state, &map);
+                    for tokens in state.user_tokens.values_mut() {
+                        for token in tokens.iter_mut() {
+                            token.push_at_meeting(&state.revealed_sector_indexes);
+                        }
+                    }
+                    state.game_stage = PlanetXStage::UserMove;
+                    state.meeting_ready_users.clear();
+                    state.meeting_published_users.clear();
+                    state.advance_turn();
+                    state.recompute_visible_range();
+                } else {
+                    state.advance_turn();
+                }
+            }
+            PlanetXStage::GameEnd => {}
+        }
 
         Ok(result)
+    }
+
+    fn op_allowed_in_stage(stage: &PlanetXStage, op: &Operation) -> bool {
+        match stage {
+            PlanetXStage::UserMove => matches!(
+                op,
+                Operation::Survey(_) | Operation::Target(_) | Operation::Research(_) | Operation::Locate(_)
+            ),
+            PlanetXStage::MeetingProposal => matches!(op, Operation::ReadyPublish(_)),
+            PlanetXStage::MeetingPublish => matches!(op, Operation::DoPublish(_)),
+            PlanetXStage::LastMove => matches!(op, Operation::Locate(_) | Operation::DoPublish(_)),
+            PlanetXStage::GameEnd => false,
+        }
+    }
+
+    fn operation_cost(op: &Operation, map_size: usize) -> usize {
+        match op {
+            Operation::Survey(s) => {
+                let range_len = if s.start <= s.end {
+                    s.end - s.start + 1
+                } else {
+                    map_size - s.start + s.end + 1
+                };
+                4usize.saturating_sub((range_len.saturating_sub(1)) / 3)
+            }
+            Operation::Target(_) => 4,
+            Operation::Research(_) => 1,
+            Operation::Locate(_) => 5,
+            Operation::ReadyPublish(_) | Operation::DoPublish(_) => 0,
+        }
+    }
+
+    fn is_meeting_triggered(state: &PlanetXState, user_id: &str) -> bool {
+        let Some(step) = state.player_steps.get(user_id).copied() else {
+            return false;
+        };
+        let max = state.map_type.sector_count();
+        let position = (step % max) + 1;
+        state
+            .map_type
+            .meeting_points()
+            .iter()
+            .any(|(idx, _)| *idx == position)
+    }
+
+    fn in_visible_range(start_index: usize, end_index: usize, index: usize, max: usize) -> bool {
+        if start_index == 0 || end_index == 0 || index == 0 || max == 0 {
+            return false;
+        }
+        if start_index > max || end_index > max || index > max {
+            return false;
+        }
+        if start_index <= end_index {
+            return index >= start_index && index <= end_index;
+        }
+        index >= start_index || index <= end_index
+    }
+
+    fn should_enter_last_move(result: &OperationResult) -> bool {
+        matches!(result, OperationResult::Locate(true))
+    }
+
+    fn build_last_move_users(state: &PlanetXState, locator_user: &str) -> Vec<String> {
+        let locator_step = state.player_steps.get(locator_user).copied().unwrap_or(0);
+        let mut users = state
+            .turn_order
+            .iter()
+            .filter(|u| u.as_str() != locator_user)
+            .filter(|u| state.player_steps.get((*u).as_str()).copied().unwrap_or(0) < locator_step)
+            .cloned()
+            .collect::<Vec<_>>();
+        users.sort_by(|a, b| {
+            let sa = state.player_steps.get(a).copied().unwrap_or(0);
+            let sb = state.player_steps.get(b).copied().unwrap_or(0);
+            sa.cmp(&sb).then_with(|| {
+                let ia = state.turn_order.iter().position(|u| u == a).unwrap_or(usize::MAX);
+                let ib = state.turn_order.iter().position(|u| u == b).unwrap_or(usize::MAX);
+                ia.cmp(&ib)
+            })
+        });
+        users
+    }
+
+    fn finalize_game(state: &mut PlanetXState, map: &Map) {
+        state.game_stage = PlanetXStage::GameEnd;
+        state.meeting_ready_users.clear();
+        state.meeting_published_users.clear();
+        state.last_move_users.clear();
+
+        for tokens in state.user_tokens.values_mut() {
+            for token in tokens.iter_mut() {
+                if token.reveal_in_the_end() && !map.meeting_check(token.secret.sector_index, &token.r#type)
+                {
+                    token.secret.meeting_index = 4;
+                }
+            }
+        }
+
+        let map_type = state.map_type.clone();
+        let mut results = Vec::new();
+        for user_id in &state.turn_order {
+            let tokens = state.user_tokens.get(user_id);
+
+            let comet = tokens
+                .map(|v| {
+                    v.iter()
+                        .filter(|t| t.is_success_located(SectorType::Comet))
+                        .count()
+                })
+                .unwrap_or(0);
+            let asteroid = tokens
+                .map(|v| {
+                    v.iter()
+                        .filter(|t| t.is_success_located(SectorType::Asteroid))
+                        .count()
+                })
+                .unwrap_or(0);
+            let dwarf_planet = tokens
+                .map(|v| {
+                    v.iter()
+                        .filter(|t| t.is_success_located(SectorType::DwarfPlanet))
+                        .count()
+                })
+                .unwrap_or(0);
+            let nebula = tokens
+                .map(|v| {
+                    v.iter()
+                        .filter(|t| t.is_success_located(SectorType::Nebula))
+                        .count()
+                })
+                .unwrap_or(0);
+
+            let mut first = 0;
+            for sector_index in 1..=map_type.sector_count() {
+                let mut sector_tokens = state
+                    .user_tokens
+                    .values()
+                    .flat_map(|all_tokens| {
+                        all_tokens.iter().filter(|t| {
+                            t.secret.sector_index == sector_index && t.is_success_located_any()
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                sector_tokens.sort_by(|a, b| a.secret.meeting_index.cmp(&b.secret.meeting_index));
+                let Some(first_meeting_index) = sector_tokens.first().map(|t| t.secret.meeting_index) else {
+                    continue;
+                };
+                if sector_tokens.iter().any(|t| {
+                    t.secret.meeting_index == first_meeting_index && t.secret.user_id == *user_id
+                }) {
+                    first += 1;
+                }
+            }
+
+            let step = state.player_steps.get(user_id).copied().unwrap_or(0);
+            let x = state
+                .player_results
+                .get(user_id)
+                .and_then(|v| v.last())
+                .map_or(0, |r| match r {
+                    OperationResult::Locate(true) => {
+                        if state.terminator_step == step {
+                            10
+                        } else {
+                            2 * state.terminator_step.saturating_sub(step)
+                        }
+                    }
+                    _ => 0,
+                });
+
+            let sum = (match map_type {
+                crate::map::MapType::Standard => dwarf_planet * 4,
+                crate::map::MapType::Expert => dwarf_planet * 2,
+            }) + asteroid * 2
+                + comet * 3
+                + nebula * 4
+                + first
+                + x;
+
+            results.push(crate::model::UserResultSummary {
+                id: user_id.clone(),
+                name: user_id.clone(),
+                sum,
+                first,
+                comet,
+                asteroid,
+                dwarf_planet,
+                nebula,
+                x,
+                step,
+            });
+        }
+
+        results.sort_by(|a, b| a.sum.cmp(&b.sum).then_with(|| a.first.cmp(&b.first)));
+        results.reverse();
+        state.game_result = Some(results);
+    }
+
+    fn resolve_meeting_checks(state: &mut PlanetXState, map: &Map) {
+        let mut to_reveal = Vec::<usize>::new();
+
+        // First pass: tokens whose meeting countdown reached 0 are checked directly.
+        for tokens in state.user_tokens.values_mut() {
+            for token in tokens.iter_mut() {
+                if !token.any_ready_checked() {
+                    continue;
+                }
+                let correct = map.meeting_check(token.secret.sector_index, &token.r#type);
+                token.secret.r#type = Some(token.r#type.clone());
+                if correct {
+                    to_reveal.push(token.secret.sector_index);
+                } else {
+                    token.secret.meeting_index = 4;
+                    let owner = token.secret.user_id.clone();
+                    let step = state.player_steps.entry(owner).or_insert(0);
+                    *step += 1;
+                }
+            }
+        }
+
+        for idx in to_reveal {
+            if !state.revealed_sector_indexes.contains(&idx) {
+                state.revealed_sector_indexes.push(idx);
+            }
+        }
+
+        // Second pass: tokens on already revealed sectors are checked immediately.
+        for tokens in state.user_tokens.values_mut() {
+            for token in tokens.iter_mut() {
+                if !(token.secret.r#type.is_none()
+                    && token.placed
+                    && state.revealed_sector_indexes.contains(&token.secret.sector_index))
+                {
+                    continue;
+                }
+                let correct = map.meeting_check(token.secret.sector_index, &token.r#type);
+                token.secret.r#type = Some(token.r#type.clone());
+                if !correct {
+                    token.secret.meeting_index = 4;
+                    let owner = token.secret.user_id.clone();
+                    let step = state.player_steps.entry(owner).or_insert(0);
+                    *step += 1;
+                }
+            }
+        }
     }
 }
 
@@ -300,6 +640,15 @@ impl Game for PlanetXGame {
             }
         };
         s.research_clues = research_clues;
+        s.game_stage = PlanetXStage::UserMove;
+        s.start_index = 1;
+        s.end_index = s.map_type.sector_count() / 2;
+        s.meeting_ready_users.clear();
+        s.meeting_published_users.clear();
+        s.last_move_users.clear();
+        s.terminator_step = 0;
+        s.game_result = None;
+        s.recompute_visible_range();
         s.seq += 1;
 
         ActionResult::Ok {
@@ -478,5 +827,154 @@ impl Game for PlanetXGame {
                 "planetx_unknown_action_type".into(),
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::map::{MapType, SectorType};
+    use crate::operation::{
+        DoPublishOperation, LocateOperation, Operation, ReadyPublishOperation, TargetOperation,
+    };
+
+    fn standard_test_map() -> Vec<SectorType> {
+        vec![
+            SectorType::Comet,
+            SectorType::Comet,
+            SectorType::Comet,
+            SectorType::X,
+            SectorType::Asteroid,
+            SectorType::Space,
+            SectorType::Space,
+            SectorType::Space,
+            SectorType::Space,
+            SectorType::Space,
+            SectorType::Space,
+            SectorType::Space,
+        ]
+    }
+
+    fn base_state(players: &[&str]) -> PlanetXState {
+        let mut s = PlanetXState::new();
+        s.started = true;
+        s.map_type = MapType::Standard;
+        s.map_sectors = standard_test_map();
+        s.turn_order = players.iter().map(|u| (*u).to_string()).collect();
+        s.players = s.turn_order.clone();
+        s.turn_index = 0;
+        s.start_index = 1;
+        s.end_index = s.map_type.sector_count();
+        s
+    }
+
+    #[test]
+    fn meeting_flow_proposal_to_publish_to_user_move() {
+        let mut s = base_state(&["alice", "bob"]);
+        s.game_stage = PlanetXStage::MeetingProposal;
+        s.user_tokens
+            .insert("alice".into(), s.map_type.generate_tokens("alice".into(), 1));
+        s.user_tokens
+            .insert("bob".into(), s.map_type.generate_tokens("bob".into(), 2));
+
+        let r1 = PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "alice",
+            &Operation::ReadyPublish(ReadyPublishOperation {
+                sectors: vec![SectorType::Comet],
+            }),
+        )
+        .expect("alice ready publish should succeed");
+        assert!(matches!(r1, OperationResult::ReadyPublish(1)));
+        assert_eq!(s.game_stage, PlanetXStage::MeetingProposal);
+        assert_eq!(s.turn_order[s.turn_index], "bob");
+
+        let r2 = PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "bob",
+            &Operation::ReadyPublish(ReadyPublishOperation {
+                sectors: vec![SectorType::Comet],
+            }),
+        )
+        .expect("bob ready publish should succeed");
+        assert!(matches!(r2, OperationResult::ReadyPublish(1)));
+        assert_eq!(s.game_stage, PlanetXStage::MeetingPublish);
+        assert_eq!(s.turn_order[s.turn_index], "alice");
+
+        let r3 = PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "alice",
+            &Operation::DoPublish(DoPublishOperation {
+                index: 1,
+                sector_type: SectorType::Comet,
+            }),
+        )
+        .expect("alice do publish should succeed");
+        assert!(matches!(r3, OperationResult::DoPublish((1, SectorType::Comet))));
+        assert_eq!(s.game_stage, PlanetXStage::MeetingPublish);
+        assert_eq!(s.turn_order[s.turn_index], "bob");
+
+        let r4 = PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "bob",
+            &Operation::DoPublish(DoPublishOperation {
+                index: 2,
+                sector_type: SectorType::Comet,
+            }),
+        )
+        .expect("bob do publish should succeed");
+        assert!(matches!(r4, OperationResult::DoPublish((2, SectorType::Comet))));
+        assert_eq!(s.game_stage, PlanetXStage::UserMove);
+        assert!(s.meeting_ready_users.is_empty());
+        assert!(s.meeting_published_users.is_empty());
+    }
+
+    #[test]
+    fn locate_success_enters_last_move_and_finishes_game_end() {
+        let mut s = base_state(&["alice", "bob", "carol"]);
+        s.player_steps.insert("alice".into(), 7);
+        s.player_steps.insert("bob".into(), 5);
+        s.player_steps.insert("carol".into(), 9);
+        s.turn_index = 2;
+
+        let locate_ok = Operation::Locate(LocateOperation {
+            index: 4,
+            pre_sector_type: SectorType::Comet,
+            next_sector_type: SectorType::Asteroid,
+        });
+        let locate_bad = Operation::Locate(LocateOperation {
+            index: 4,
+            pre_sector_type: SectorType::Asteroid,
+            next_sector_type: SectorType::Comet,
+        });
+
+        let r1 = PlanetXGame::apply_planetx_operation(&mut s, "carol", &locate_ok)
+            .expect("carol locate should succeed");
+        assert!(matches!(r1, OperationResult::Locate(true)));
+        assert_eq!(s.game_stage, PlanetXStage::LastMove);
+        assert_eq!(s.last_move_users, vec!["bob".to_string(), "alice".to_string()]);
+        assert_eq!(s.turn_order[s.turn_index], "bob");
+
+        PlanetXGame::apply_planetx_operation(&mut s, "bob", &locate_bad)
+            .expect("bob last move should succeed");
+        assert_eq!(s.game_stage, PlanetXStage::LastMove);
+        assert_eq!(s.last_move_users, vec!["alice".to_string()]);
+        assert_eq!(s.turn_order[s.turn_index], "alice");
+
+        PlanetXGame::apply_planetx_operation(&mut s, "alice", &locate_bad)
+            .expect("alice last move should succeed");
+        assert_eq!(s.game_stage, PlanetXStage::GameEnd);
+        assert!(s.last_move_users.is_empty());
+        assert!(s.game_result.is_some());
+
+        let blocked = PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "alice",
+            &Operation::Target(TargetOperation { index: 1 }),
+        );
+        assert!(matches!(
+            blocked,
+            Err(game::GameError::Invalid(msg)) if msg == "planetx_invalid_move_in_stage"
+        ));
     }
 }

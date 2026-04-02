@@ -28,11 +28,13 @@ class PlanetXRoomInfos extends StatelessWidget {
     final mapType = stateMap['map_type']?.toString() ?? '-';
     final current = currentPlayer.isEmpty ? '-' : currentPlayer;
     final isMyTurn = currentPlayer.isNotEmpty && currentPlayer == userId;
-    final phaseText = !started
-        ? 'Waiting for ready/start'
-        : (currentPlayer.isEmpty
-            ? 'Waiting for state sync'
-            : (isMyTurn ? 'Your turn' : 'Waiting for $currentPlayer'));
+    final stage = stateMap['game_stage']?.toString() ?? '';
+    final phaseText = _phaseText(
+      started: started,
+      stage: stage,
+      isMyTurn: isMyTurn,
+      current: current,
+    );
 
     return Container(
       decoration: BoxDecoration(
@@ -54,6 +56,13 @@ class PlanetXRoomInfos extends StatelessWidget {
                 label: isMyTurn ? 'MY_TURN' : 'TURN_WAIT',
                 color: isMyTurn ? const Color(0xFF00695C) : const Color(0xFF546E7A),
               ),
+              if (stage.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                _statusChip(
+                  label: stage.toUpperCase(),
+                  color: const Color(0xFF1565C0),
+                ),
+              ],
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -88,6 +97,33 @@ class PlanetXRoomInfos extends StatelessWidget {
     );
   }
 
+  String _phaseText({
+    required bool started,
+    required String stage,
+    required bool isMyTurn,
+    required String current,
+  }) {
+    if (!started) {
+      return 'Waiting for ready/start';
+    }
+
+    switch (stage) {
+      case 'meeting_proposal':
+        return isMyTurn ? 'Meeting proposal: choose tokens' : 'Meeting proposal: waiting for $current';
+      case 'meeting_publish':
+        return isMyTurn ? 'Meeting publish: place token' : 'Meeting publish: waiting for $current';
+      case 'last_move':
+        return isMyTurn ? 'Last move: your final action' : 'Last move: waiting for $current';
+      case 'game_end':
+        return 'Game over';
+      default:
+        if (current == '-') {
+          return 'Waiting for state sync';
+        }
+        return isMyTurn ? 'Your turn' : 'Waiting for $current';
+    }
+  }
+
   String _displayName(String idOrName) {
     final v = idOrName.trim();
     if (v.isEmpty) {
@@ -105,10 +141,12 @@ class PlanetXMessageBar extends StatelessWidget {
   const PlanetXMessageBar({
     super.key,
     required this.hint,
+    required this.stageHint,
     required this.error,
   });
 
   final String hint;
+  final String stageHint;
   final String? error;
 
   @override
@@ -116,7 +154,9 @@ class PlanetXMessageBar extends StatelessWidget {
     final normalizedHint = hint.trim();
     final text = error != null && error!.isNotEmpty
         ? error!
-        : (normalizedHint.isNotEmpty ? normalizedHint : 'Waiting for room/game state sync...');
+      : (normalizedHint.isNotEmpty
+        ? normalizedHint
+        : (stageHint.trim().isNotEmpty ? stageHint.trim() : 'Waiting for room/game state sync...'));
     final isError = error != null && error!.isNotEmpty;
     return Container(
       decoration: BoxDecoration(
@@ -157,9 +197,11 @@ class PlanetXGameResult extends StatelessWidget {
   const PlanetXGameResult({
     super.key,
     required this.stateMap,
+    this.playerNameById = const <String, String>{},
   });
 
   final Map<String, dynamic> stateMap;
+  final Map<String, String> playerNameById;
 
   @override
   Widget build(BuildContext context) {
@@ -192,7 +234,7 @@ class PlanetXGameResult extends StatelessWidget {
               if (row is Map)
                 TableRow(
                   children: [
-                    _CellText(row['name']?.toString() ?? ''),
+                    _CellText(_displayName(row['name']?.toString() ?? '')),
                     _CellText('${_asInt(row['first'])}'),
                     _CellText('${_asInt(row['asteroid'])}'),
                     _CellText('${_asInt(row['comet'])}'),
@@ -207,6 +249,18 @@ class PlanetXGameResult extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  String _displayName(String value) {
+    final normalized = value.trim();
+    if (normalized.isEmpty) {
+      return '-';
+    }
+    final mapped = playerNameById[normalized]?.trim();
+    if (mapped != null && mapped.isNotEmpty) {
+      return mapped;
+    }
+    return normalized;
   }
 }
 

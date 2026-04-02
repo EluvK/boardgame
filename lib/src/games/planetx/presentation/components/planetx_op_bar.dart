@@ -19,6 +19,14 @@ class PlanetXOpBar extends StatelessWidget {
     required this.currentPlayerName,
     required this.gameStage,
     required this.mapSize,
+    required this.visibleStart,
+    required this.visibleEnd,
+    required this.targetUsedCount,
+    required this.researchChoices,
+    required this.canResearch,
+    required this.readyPublishLimit,
+    required this.revealedIndexes,
+    required this.pendingPublishTypes,
     required this.sectorTypes,
     required this.publishableTypes,
     required this.onSync,
@@ -37,12 +45,20 @@ class PlanetXOpBar extends StatelessWidget {
   final String currentPlayerName;
   final String gameStage;
   final int mapSize;
+  final int visibleStart;
+  final int visibleEnd;
+  final int targetUsedCount;
+  final List<String> researchChoices;
+  final bool canResearch;
+  final int readyPublishLimit;
+  final List<int> revealedIndexes;
+  final List<String> pendingPublishTypes;
   final List<String> sectorTypes;
   final List<String> publishableTypes;
   final VoidCallback onSync;
-  final VoidCallback onSurvey;
-  final VoidCallback onTarget;
-  final VoidCallback onResearch;
+  final void Function(String sectorType, int start, int end) onSurvey;
+  final void Function(int index) onTarget;
+  final void Function(String clueIndex) onResearch;
   final void Function(int index, String pre, String next) onLocate;
   final void Function(List<String> sectors) onReadyPublish;
   final void Function(int index, String sectorType) onDoPublish;
@@ -57,6 +73,14 @@ class PlanetXOpBar extends StatelessWidget {
       currentPlayerName: currentPlayerName,
       gameStage: gameStage,
       mapSize: mapSize,
+      visibleStart: visibleStart,
+      visibleEnd: visibleEnd,
+      targetUsedCount: targetUsedCount,
+      researchChoices: researchChoices,
+      canResearch: canResearch,
+      readyPublishLimit: readyPublishLimit,
+      revealedIndexes: revealedIndexes,
+      pendingPublishTypes: pendingPublishTypes,
       sectorTypes: sectorTypes,
       publishableTypes: publishableTypes,
       onSync: onSync,
@@ -79,6 +103,14 @@ class _PlanetXOpBarForm extends StatefulWidget {
     required this.currentPlayerName,
     required this.gameStage,
     required this.mapSize,
+    required this.visibleStart,
+    required this.visibleEnd,
+    required this.targetUsedCount,
+    required this.researchChoices,
+    required this.canResearch,
+    required this.readyPublishLimit,
+    required this.revealedIndexes,
+    required this.pendingPublishTypes,
     required this.sectorTypes,
     required this.publishableTypes,
     required this.onSync,
@@ -97,12 +129,20 @@ class _PlanetXOpBarForm extends StatefulWidget {
   final String currentPlayerName;
   final String gameStage;
   final int mapSize;
+  final int visibleStart;
+  final int visibleEnd;
+  final int targetUsedCount;
+  final List<String> researchChoices;
+  final bool canResearch;
+  final int readyPublishLimit;
+  final List<int> revealedIndexes;
+  final List<String> pendingPublishTypes;
   final List<String> sectorTypes;
   final List<String> publishableTypes;
   final VoidCallback onSync;
-  final VoidCallback onSurvey;
-  final VoidCallback onTarget;
-  final VoidCallback onResearch;
+  final void Function(String sectorType, int start, int end) onSurvey;
+  final void Function(int index) onTarget;
+  final void Function(String clueIndex) onResearch;
   final void Function(int index, String pre, String next) onLocate;
   final void Function(List<String> sectors) onReadyPublish;
   final void Function(int index, String sectorType) onDoPublish;
@@ -113,6 +153,13 @@ class _PlanetXOpBarForm extends StatefulWidget {
 
 class _PlanetXOpBarFormState extends State<_PlanetXOpBarForm> {
   PlanetXOpKind? _expanded;
+
+  String _surveyType = 'comet';
+  int _surveyStart = 1;
+  int _surveyEnd = 1;
+
+  int _targetIndex = 1;
+  String _researchIndex = 'A';
 
   int _locateIndex = 1;
   String _locatePre = 'comet';
@@ -128,6 +175,11 @@ class _PlanetXOpBarFormState extends State<_PlanetXOpBarForm> {
   void initState() {
     super.initState();
     final opTypes = widget.sectorTypes.where((s) => s != 'x' && s != 'space').toList();
+    _surveyType = opTypes.contains('comet') ? 'comet' : (opTypes.isEmpty ? 'comet' : opTypes.first);
+    _surveyStart = _normalizeIndex(widget.visibleStart, widget.mapSize);
+    _surveyEnd = _normalizeIndex(widget.visibleEnd, widget.mapSize);
+    _targetIndex = _normalizeIndex(widget.visibleStart, widget.mapSize);
+    _researchIndex = widget.researchChoices.isEmpty ? 'A' : widget.researchChoices.first;
     _locatePre = opTypes.isEmpty ? 'comet' : opTypes.first;
     _locateNext = opTypes.length > 1 ? opTypes[1] : _locatePre;
     final publishTypes = widget.publishableTypes.isEmpty ? opTypes : widget.publishableTypes;
@@ -144,9 +196,30 @@ class _PlanetXOpBarFormState extends State<_PlanetXOpBarForm> {
     final publishTypes = widget.publishableTypes.isEmpty ? opTypes : widget.publishableTypes;
     final isMyTurn = widget.currentPlayerId.isNotEmpty && widget.currentPlayerId == widget.currentUserId;
     final availableOps = widget.roomStarted && isMyTurn ? _opsByStage(widget.gameStage) : const <PlanetXOpKind>[];
+    final surveyStart = _normalizeIndex(widget.visibleStart, widget.mapSize);
+    final surveyEnd = _normalizeIndex(widget.visibleEnd, widget.mapSize);
+    final canTarget = widget.targetUsedCount < 2;
+    final researchChoices = widget.researchChoices.isEmpty ? const ['A'] : widget.researchChoices;
+    final readyLimit = widget.readyPublishLimit <= 1 ? 1 : 2;
+    final doPublishTypes = widget.gameStage == 'last_move'
+        ? publishTypes
+        : (widget.pendingPublishTypes.isEmpty ? publishTypes : widget.pendingPublishTypes);
 
     if (_expanded != null && !availableOps.contains(_expanded)) {
       _expanded = null;
+    }
+
+    if (_surveyStart != surveyStart) {
+      _surveyStart = surveyStart;
+    }
+    if (_surveyEnd != surveyEnd) {
+      _surveyEnd = surveyEnd;
+    }
+    if (!researchChoices.contains(_researchIndex)) {
+      _researchIndex = researchChoices.first;
+    }
+    if (!doPublishTypes.contains(_publishType) && doPublishTypes.isNotEmpty) {
+      _publishType = doPublishTypes.first;
     }
 
     return Column(
@@ -177,23 +250,102 @@ class _PlanetXOpBarFormState extends State<_PlanetXOpBarForm> {
         const SizedBox(height: 8),
         if (_expanded == PlanetXOpKind.survey)
           _inlinePanel(
-            child: _confirmButton(
-              label: 'Confirm Survey (1-6 comet)',
-              onPressed: widget.busy ? null : widget.onSurvey,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _typeDropdown(
+                  label: 'Type',
+                  value: _surveyType,
+                  items: opTypes,
+                  onChanged: (v) => setState(() => _surveyType = v),
+                ),
+                _numberField(
+                  label: 'From',
+                  value: _surveyStart,
+                  min: surveyStart,
+                  max: surveyEnd,
+                  onChanged: (v) => setState(() {
+                    _surveyStart = v;
+                    if (_surveyEnd < _surveyStart) {
+                      _surveyEnd = _surveyStart;
+                    }
+                  }),
+                ),
+                _numberField(
+                  label: 'To',
+                  value: _surveyEnd,
+                  min: _surveyStart,
+                  max: surveyEnd,
+                  onChanged: (v) => setState(() => _surveyEnd = v),
+                ),
+                _costTag('Cost ${_surveyCost(_surveyStart, _surveyEnd, widget.mapSize)}'),
+                _confirmButton(
+                  label: 'Confirm Survey',
+                  onPressed: widget.busy
+                      ? null
+                      : () => widget.onSurvey(_surveyType, _surveyStart, _surveyEnd),
+                ),
+              ],
             ),
           ),
         if (_expanded == PlanetXOpKind.target)
           _inlinePanel(
-            child: _confirmButton(
-              label: 'Confirm Target (1)',
-              onPressed: widget.busy ? null : widget.onTarget,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _numberField(
+                  label: 'Sector',
+                  value: _targetIndex,
+                  min: surveyStart,
+                  max: surveyEnd,
+                  onChanged: (v) => setState(() => _targetIndex = v),
+                ),
+                _costTag('Cost 4 · left ${2 - widget.targetUsedCount}'),
+                _confirmButton(
+                  label: canTarget ? 'Confirm Target' : 'Target Exhausted',
+                  onPressed: widget.busy || !canTarget ? null : () => widget.onTarget(_targetIndex),
+                ),
+              ],
             ),
           ),
         if (_expanded == PlanetXOpKind.research)
           _inlinePanel(
-            child: _confirmButton(
-              label: 'Confirm Research A',
-              onPressed: widget.busy ? null : widget.onResearch,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Clue:'),
+                    const SizedBox(width: 6),
+                    DropdownButton<String>(
+                      value: _researchIndex,
+                      items: researchChoices
+                          .map((e) => DropdownMenuItem<String>(value: e, child: Text(e)))
+                          .toList(),
+                      onChanged: widget.busy || !widget.canResearch
+                          ? null
+                          : (v) {
+                              if (v != null) {
+                                setState(() => _researchIndex = v);
+                              }
+                            },
+                    ),
+                  ],
+                ),
+                _costTag('Cost 1'),
+                _confirmButton(
+                  label: widget.canResearch ? 'Confirm Research' : 'Research Locked',
+                  onPressed:
+                      widget.busy || !widget.canResearch ? null : () => widget.onResearch(_researchIndex),
+                ),
+              ],
             ),
           ),
         if (_expanded == PlanetXOpKind.locate)
@@ -228,6 +380,7 @@ class _PlanetXOpBarFormState extends State<_PlanetXOpBarForm> {
                       ? null
                       : () => widget.onLocate(_locateIndex, _locatePre, _locateNext),
                 ),
+                _costTag('Cost 5'),
               ],
             ),
           ),
@@ -244,18 +397,19 @@ class _PlanetXOpBarFormState extends State<_PlanetXOpBarForm> {
                   items: publishTypes,
                   onChanged: (v) => setState(() => _readyFirst = v),
                 ),
-                _typeDropdownNullable(
-                  label: 'Token 2',
-                  value: _readySecond,
-                  items: publishTypes,
-                  onChanged: (v) => setState(() => _readySecond = v),
-                ),
+                if (readyLimit >= 2)
+                  _typeDropdownNullable(
+                    label: 'Token 2',
+                    value: _readySecond,
+                    items: publishTypes,
+                    onChanged: (v) => setState(() => _readySecond = v),
+                  ),
                 _confirmButton(
                   label: 'Confirm Ready Publish',
                   onPressed: widget.busy
                       ? null
                       : () {
-                          final selected = <String?>[_readyFirst, _readySecond]
+                          final selected = <String?>[_readyFirst, if (readyLimit >= 2) _readySecond]
                               .whereType<String>()
                               .toList();
                           if (selected.isEmpty) {
@@ -284,12 +438,15 @@ class _PlanetXOpBarFormState extends State<_PlanetXOpBarForm> {
                 _typeDropdown(
                   label: 'Type',
                   value: _publishType,
-                  items: publishTypes,
+                  items: doPublishTypes,
                   onChanged: (v) => setState(() => _publishType = v),
                 ),
+                _costTag('revealed: ${widget.revealedIndexes.length}'),
                 _confirmButton(
                   label: 'Confirm Publish',
                   onPressed: widget.busy
+                      || widget.revealedIndexes.contains(_publishIndex)
+                      || doPublishTypes.isEmpty
                       ? null
                       : () => widget.onDoPublish(_publishIndex, _publishType),
                 ),
@@ -315,6 +472,8 @@ class _PlanetXOpBarFormState extends State<_PlanetXOpBarForm> {
         return const [PlanetXOpKind.doPublish];
       case 'last_move':
         return const [PlanetXOpKind.locate, PlanetXOpKind.doPublish];
+      case 'game_end':
+        return const [];
       default:
         return const [
           PlanetXOpKind.survey,
@@ -325,6 +484,35 @@ class _PlanetXOpBarFormState extends State<_PlanetXOpBarForm> {
           PlanetXOpKind.doPublish,
         ];
     }
+  }
+
+  int _normalizeIndex(int value, int max) {
+    if (max <= 0) {
+      return 1;
+    }
+    if (value <= 0) {
+      return 1;
+    }
+    if (value > max) {
+      return max;
+    }
+    return value;
+  }
+
+  int _surveyCost(int from, int to, int max) {
+    final length = from <= to ? (to - from + 1) : (max - from + to + 1);
+    return 4 - ((length - 1) ~/ 3);
+  }
+
+  Widget _costTag(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        color: Colors.blueGrey.withAlpha(22),
+      ),
+      child: Text(text, style: const TextStyle(fontSize: 12)),
+    );
   }
 
   String _labelForOp(PlanetXOpKind kind) {

@@ -55,6 +55,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
   final Map<String, String> _clueSecretsByIndex = <String, String>{};
   final Map<String, String> _clueDetailsByIndex = <String, String>{};
   final Map<String, String> _playerNamesById = <String, String>{};
+  int _lastStateOpSeqLogged = -1;
   String _latestHint = '';
 
   _SectorMarkMode _markMode = _SectorMarkMode.confirm;
@@ -156,7 +157,8 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
       _latestState = PlanetXStateEnvelope.fromJson(payload);
       _roomStarted = _latestState?.state['started'] == true;
       _ensureMarkBuffer();
-      _syncClueDataFromState(_latestState?.state ?? const <String, dynamic>{});
+      _syncClueDataFromState(_latestState?.state ?? const <String, dynamic>{}, widget.session.userId);
+      _appendOpFromState(payload, _latestState?.state ?? const <String, dynamic>{});
       _latestHint = _latestState?.event ?? '';
       _appendLimited(
         _logs,
@@ -173,6 +175,52 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
       }
     });
     return true;
+  }
+
+  void _appendOpFromState(Map<String, dynamic> payload, Map<String, dynamic> stateMap) {
+    final event = payload['event']?.toString() ?? '';
+    if (event != 'action_applied') {
+      return;
+    }
+
+    final seq = _asInt(stateMap['seq']);
+    if (seq > 0 && seq == _lastStateOpSeqLogged) {
+      return;
+    }
+    _lastStateOpSeqLogged = seq;
+
+    final actor = stateMap['last_actor']?.toString() ?? '';
+    final lastPayload = _asMap(stateMap['last_payload']);
+    final op = _asMap(lastPayload['op']);
+    final summary = _summarizeOperationRequest(op);
+    if (summary.isEmpty) {
+      return;
+    }
+
+    _appendLimited(
+      _opLog,
+      PlanetXLogEntry(
+        time: DateTime.now(),
+        type: 'op',
+        actor: actor,
+        summary: summary,
+        raw: jsonEncode(op),
+        category: actor == widget.session.userId ? 'self_op' : 'other_op',
+      ),
+    );
+
+    if (op.containsKey('ready_publish') || op.containsKey('do_publish')) {
+      _appendLimited(
+        _meetingLog,
+        PlanetXLogEntry(
+          time: DateTime.now(),
+          type: 'conference',
+          actor: actor,
+          summary: summary,
+          raw: jsonEncode(op),
+        ),
+      );
+    }
   }
 
   void _onMessage(Map<String, dynamic> payload) {
@@ -227,6 +275,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
               actor: payload['by']?.toString() ?? widget.session.userId,
               summary: _summarizeOperationResult(result),
               raw: jsonEncode(payload),
+              category: 'self_result',
             ),
           );
           if (hasMeetingPublish) {
@@ -415,11 +464,22 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     final sectors = _asStringList(stateMap['map_sectors']);
     final gameStage = stateMap['game_stage']?.toString() ?? '';
     final mapSize = _asInt(stateMap['map_type'] == 'expert' ? 18 : 12);
-    final publishableTypes = _publishableTypes(stateMap);
-    final availableSectorTypes = _availableSectorTypes(sectors, publishableTypes);
     final currentPlayer = _resolveCurrentPlayer(stateMap);
+    final visibleRange = _resolveVisibleRange(stateMap, currentPlayer, mapSize);
+    final visibleStart = visibleRange.$1;
+    final visibleEnd = visibleRange.$2;
+    final targetUsedCount = _playerTargetUsedCount(stateMap, widget.session.userId);
+    final researchChoices = _researchChoices(stateMap, widget.session.userId);
+    final canResearch = _canResearchNow(stateMap, widget.session.userId);
+    final readyPublishLimit = stateMap['map_type']?.toString() == 'expert' ? 2 : 1;
+    final revealedIndexes = _revealedIndexes(stateMap);
+    final publishableTypes = _publishableTypes(stateMap);
+    final pendingPublishTypes = _pendingPublishTypes(stateMap, widget.session.userId);
+    final availableSectorTypes = _availableSectorTypes(sectors, publishableTypes);
     final currentPlayerName = _playerDisplayName(currentPlayer);
     final playerNames = players.map(_playerDisplayName).toList();
+    final playerMarkers = _playerMarkers(stateMap);
+    final stageHint = _buildStageHint(gameStage, currentPlayerName);
     final selfName = _playerDisplayName(widget.session.userId);
 
     return Scaffold(
@@ -453,6 +513,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
               padding: const EdgeInsets.only(bottom: 4),
               child: PlanetXMessageBar(
                 hint: _latestHint,
+                stageHint: stageHint,
                 error: _error,
               ),
             ),
@@ -460,7 +521,10 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
               padding: const EdgeInsets.only(bottom: 6),
               child: _buildReadyBar(),
             ),
-            PlanetXGameResult(stateMap: stateMap),
+            PlanetXGameResult(
+              stateMap: stateMap,
+              playerNameById: _playerNamesById,
+            ),
             Padding(
               padding: const EdgeInsets.only(bottom: 4),
               child: PlanetXOpBar(
@@ -471,6 +535,14 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
                 currentPlayerName: currentPlayerName,
                 gameStage: gameStage,
                 mapSize: mapSize,
+                visibleStart: visibleStart,
+                visibleEnd: visibleEnd,
+                targetUsedCount: targetUsedCount,
+                researchChoices: researchChoices,
+                canResearch: canResearch,
+                readyPublishLimit: readyPublishLimit,
+                revealedIndexes: revealedIndexes,
+                pendingPublishTypes: pendingPublishTypes,
                 sectorTypes: availableSectorTypes,
                 publishableTypes: publishableTypes,
                 onSync: () => _run(
@@ -480,31 +552,31 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
                   ),
                   'sync',
                 ),
-                onSurvey: () => _run(
+                onSurvey: (sectorType, start, end) => _run(
                   () => _client.sendSurvey(
                     room: widget.session.roomId,
                     userId: widget.session.userId,
-                    sectorType: 'comet',
-                    start: 1,
-                    end: 6,
+                    sectorType: sectorType,
+                    start: start,
+                    end: end,
                   ),
                   'survey',
                 ),
-                onTarget: () => _run(
+                onTarget: (index) => _run(
                   () => _client.sendTarget(
                     room: widget.session.roomId,
                     userId: widget.session.userId,
-                    index: 1,
+                    index: index,
                   ),
                   'target',
                 ),
-                onResearch: () => _run(
+                onResearch: (clueIndex) => _run(
                   () => _client.sendResearch(
                     room: widget.session.roomId,
                     userId: widget.session.userId,
-                    clueIndex: 'A',
+                    clueIndex: clueIndex,
                   ),
-                  'research_A',
+                  'research',
                 ),
                 onLocate: (index, pre, next) => _run(
                   () => _client.sendLocate(
@@ -571,6 +643,9 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
                     ),
                     busy: _busy,
                     fallbackSectorCount: mapSize,
+                    visibleStart: visibleStart,
+                    visibleEnd: visibleEnd,
+                    playerMarkers: playerMarkers,
                     markModeConfirm: _markMode == _SectorMarkMode.confirm,
                     onMarkModeChanged: (confirmMode) {
                       setState(() {
@@ -778,7 +853,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
         .toList();
   }
 
-  void _syncClueDataFromState(Map<String, dynamic> stateMap) {
+  void _syncClueDataFromState(Map<String, dynamic> stateMap, String userId) {
     final researchClues = stateMap['research_clues'];
     if (researchClues is List) {
       for (final raw in researchClues) {
@@ -795,11 +870,9 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     }
 
     final resultsByUser = _asMap(stateMap['player_results']);
-    for (final resultList in resultsByUser.values) {
-      if (resultList is! List) {
-        continue;
-      }
-      for (final raw in resultList) {
+    final myResults = resultsByUser[userId];
+    if (myResults is List) {
+      for (final raw in myResults) {
         if (raw is! Map) {
           continue;
         }
@@ -947,12 +1020,48 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
       return 'locate=${result['locate']}';
     }
     if (result.containsKey('ready_publish')) {
-      return 'ready_publish=${result['ready_publish']}';
+      return 'ready_publish count=${result['ready_publish']}';
     }
     if (result.containsKey('do_publish')) {
+      final publish = result['do_publish'];
+      if (publish is List && publish.length >= 2) {
+        return 'do_publish index=${publish[0]} type=${publish[1]}';
+      }
       return 'do_publish';
     }
     return 'operation';
+  }
+
+  String _summarizeOperationRequest(Map<String, dynamic> op) {
+    if (op.containsKey('survey')) {
+      final s = _asMap(op['survey']);
+      return 'survey ${s['sector_type'] ?? '-'} ${s['start'] ?? '-'}-${s['end'] ?? '-'}';
+    }
+    if (op.containsKey('target')) {
+      final t = _asMap(op['target']);
+      return 'target ${t['index'] ?? '-'}';
+    }
+    if (op.containsKey('research')) {
+      final r = _asMap(op['research']);
+      return 'research ${_normalizeClueIndex(r['index'])}';
+    }
+    if (op.containsKey('locate')) {
+      final l = _asMap(op['locate']);
+      return 'locate ${l['index'] ?? '-'} (${l['pre_sector_type'] ?? '-'}, ${l['next_sector_type'] ?? '-'})';
+    }
+    if (op.containsKey('ready_publish')) {
+      final rp = _asMap(op['ready_publish']);
+      final sectors = rp['sectors'];
+      if (sectors is List) {
+        return 'ready_publish ${sectors.map((e) => e.toString()).join('/')}';
+      }
+      return 'ready_publish';
+    }
+    if (op.containsKey('do_publish')) {
+      final dp = _asMap(op['do_publish']);
+      return 'do_publish ${dp['index'] ?? '-'} ${dp['sector_type'] ?? '-'}';
+    }
+    return '';
   }
 
   String _summarizeMessage(String type, Map<String, dynamic> payload) {
@@ -965,6 +1074,22 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
       return 'recommend ${result.keys.join('/')}';
     }
     return type;
+  }
+
+  String _buildStageHint(String gameStage, String currentPlayerName) {
+    final current = currentPlayerName.isEmpty ? '-' : currentPlayerName;
+    switch (gameStage) {
+      case 'meeting_proposal':
+        return 'Meeting proposal: waiting for $current';
+      case 'meeting_publish':
+        return 'Meeting publish: waiting for $current';
+      case 'last_move':
+        return 'Last move: waiting for $current';
+      case 'game_end':
+        return 'Game over';
+      default:
+        return '';
+    }
   }
 
   Widget _buildReadyBar() {
@@ -1041,6 +1166,82 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     return result.toList()..sort();
   }
 
+  List<String> _pendingPublishTypes(Map<String, dynamic> stateMap, String userId) {
+    final userTokensById = _asMap(stateMap['user_tokens']);
+    final currentUserTokensRaw = userTokensById[userId];
+    if (currentUserTokensRaw is! List) {
+      return const <String>[];
+    }
+
+    final result = <String>{};
+    for (final item in currentUserTokensRaw) {
+      if (item is! Map) {
+        continue;
+      }
+      final token = _asMap(item);
+      if (token['placed'] != true) {
+        continue;
+      }
+      final secret = _asMap(token['secret']);
+      if (_asInt(secret['sector_index']) != 0) {
+        continue;
+      }
+      final ty = token['type']?.toString();
+      if (ty == null || ty.isEmpty) {
+        continue;
+      }
+      result.add(ty);
+    }
+    return result.toList()..sort();
+  }
+
+  List<String> _researchChoices(Map<String, dynamic> stateMap, String userId) {
+    final resultsByUser = _asMap(stateMap['player_results']);
+    final myResults = resultsByUser[userId];
+    final researched = <String>{};
+    if (myResults is List) {
+      for (final item in myResults) {
+        if (item is! Map) {
+          continue;
+        }
+        final m = _asMap(item);
+        final r = _asMap(m['research']);
+        final idx = _normalizeClueIndex(r['index']);
+        if (idx.isNotEmpty) {
+          researched.add(idx);
+        }
+      }
+    }
+
+    const all = <String>['A', 'B', 'C', 'D', 'E', 'F'];
+    final choices = all.where((e) => !researched.contains(e)).toList();
+    return choices.isEmpty ? all : choices;
+  }
+
+  bool _canResearchNow(Map<String, dynamic> stateMap, String userId) {
+    final lastPayload = _asMap(stateMap['last_payload']);
+    final op = _asMap(lastPayload['op']);
+    final isResearch = op.containsKey('research');
+    final lastActor = stateMap['last_actor']?.toString() ?? '';
+    if (isResearch && lastActor == userId) {
+      return false;
+    }
+    return true;
+  }
+
+  int _playerTargetUsedCount(Map<String, dynamic> stateMap, String userId) {
+    final usedMap = _asMap(stateMap['player_target_uses']);
+    return _asInt(usedMap[userId]);
+  }
+
+  List<int> _revealedIndexes(Map<String, dynamic> stateMap) {
+    final raw = stateMap['revealed_sector_indexes'];
+    if (raw is! List) {
+      return const <int>[];
+    }
+    return raw.map(_asInt).where((v) => v > 0).toList();
+  }
+
   String _resolveCurrentPlayer(Map<String, dynamic> stateMap) {
     final explicit = stateMap['current_player']?.toString() ?? '';
     if (explicit.isNotEmpty) {
@@ -1054,6 +1255,49 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     final turnIndex = _asInt(stateMap['turn_index']);
     final idx = turnIndex % order.length;
     return order[idx];
+  }
+
+  (int, int) _resolveVisibleRange(Map<String, dynamic> stateMap, String currentPlayer, int mapSize) {
+    final rawStart = _asInt(stateMap['start_index']);
+    final rawEnd = _asInt(stateMap['end_index']);
+    final count = mapSize <= 0 ? 12 : mapSize;
+    if (rawStart > 0 && rawEnd > 0) {
+      final normalizedStart = ((rawStart - 1 + count) % count) + 1;
+      final normalizedEnd = ((rawEnd - 1 + count) % count) + 1;
+      return (normalizedStart, normalizedEnd);
+    }
+
+    final span = count ~/ 2;
+    final stepsMap = _asMap(stateMap['player_steps']);
+    final currentStep = _asInt(stepsMap[currentPlayer]);
+    final start = (currentStep % count) + 1;
+    var end = start + span - 1;
+    if (end > count) {
+      end -= count;
+    }
+    return (start, end);
+  }
+
+  List<PlanetXPlayerMarker> _playerMarkers(Map<String, dynamic> stateMap) {
+    final order = _asStringList(stateMap['turn_order']);
+    final stepsMap = _asMap(stateMap['player_steps']);
+    if (order.isEmpty) {
+      return const <PlanetXPlayerMarker>[];
+    }
+
+    final markers = <PlanetXPlayerMarker>[];
+    for (int i = 0; i < order.length; i++) {
+      final uid = order[i];
+      final step = _asInt(stepsMap[uid]);
+      markers.add(
+        PlanetXPlayerMarker(
+          name: _playerDisplayName(uid),
+          step: step,
+          order: i,
+        ),
+      );
+    }
+    return markers;
   }
 
   List<String> _availableSectorTypes(List<String> sectors, List<String> publishableTypes) {

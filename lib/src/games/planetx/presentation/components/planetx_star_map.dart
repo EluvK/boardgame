@@ -2,6 +2,18 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+class PlanetXPlayerMarker {
+  const PlanetXPlayerMarker({
+    required this.name,
+    required this.step,
+    required this.order,
+  });
+
+  final String name;
+  final int step;
+  final int order;
+}
+
 class PlanetXStarMap extends StatelessWidget {
   const PlanetXStarMap({
     super.key,
@@ -14,6 +26,9 @@ class PlanetXStarMap extends StatelessWidget {
     required this.onRecommendCanLocate,
     required this.busy,
     required this.fallbackSectorCount,
+    required this.visibleStart,
+    required this.visibleEnd,
+    required this.playerMarkers,
     required this.markModeConfirm,
     required this.onMarkModeChanged,
     required this.canUndo,
@@ -38,6 +53,9 @@ class PlanetXStarMap extends StatelessWidget {
   final VoidCallback onRecommendCanLocate;
   final bool busy;
   final int fallbackSectorCount;
+  final int visibleStart;
+  final int visibleEnd;
+  final List<PlanetXPlayerMarker> playerMarkers;
 
   final bool markModeConfirm;
   final ValueChanged<bool> onMarkModeChanged;
@@ -273,7 +291,15 @@ class PlanetXStarMap extends StatelessWidget {
                   painter: _SectorBorderPainter(
                     sectorCount: count,
                     radius: radius,
+                    visibleStart: visibleStart,
+                    visibleEnd: visibleEnd,
+                    rotationDegrees: rotationDegrees,
                   ),
+                ),
+                ..._buildOuterSpecialPoints(
+                  size: size,
+                  radius: radius,
+                  count: count,
                 ),
                 for (int s = 0; s < count; s++)
                   ...List.generate(6, (slot) {
@@ -317,12 +343,38 @@ class PlanetXStarMap extends StatelessWidget {
                     final radians = centerDegree * math.pi / 180;
                     final x = (radius + 10) * math.cos(radians);
                     final y = (radius + 10) * math.sin(radians);
+                    final innerX = (baseRadius + 4) * math.cos(radians);
+                    final innerY = (baseRadius + 4) * math.sin(radians);
+                    final isVisible = _visibleSector(s + 1, visibleStart, visibleEnd, count);
                     return Positioned(
-                      left: size / 2 + x - 8,
-                      top: size / 2 + y - 8,
-                      child: Text('${s + 1}', style: const TextStyle(fontSize: 11)),
+                      child: Stack(
+                        children: [
+                          Positioned(
+                            left: size / 2 + x - 8,
+                            top: size / 2 + y - 8,
+                            child: Text('${s + 1}', style: const TextStyle(fontSize: 11)),
+                          ),
+                          Positioned(
+                            left: size / 2 + innerX - 8,
+                            top: size / 2 + innerY - 8,
+                            child: Text(
+                              '${s + 1}',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: isVisible ? Colors.black : Colors.grey,
+                                fontWeight: isVisible ? FontWeight.w700 : FontWeight.w400,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     );
                   }(),
+                ..._buildPlayerMarkers(
+                  size: size,
+                  count: count,
+                  radius: radius,
+                ),
                 GestureDetector(
                   onTap: onRotateCenter,
                   child: Tooltip(
@@ -393,6 +445,9 @@ class PlanetXStarMap extends StatelessWidget {
                   painter: _SectorBorderPainter(
                     sectorCount: displaySectors.length,
                     radius: radius,
+                    visibleStart: visibleStart,
+                    visibleEnd: visibleEnd,
+                    rotationDegrees: rotationDegrees,
                   ),
                 ),
                 ..._buildMeetingBackgroundMarkers(
@@ -493,6 +548,126 @@ class PlanetXStarMap extends StatelessWidget {
         ),
       );
     });
+  }
+
+  List<Widget> _buildPlayerMarkers({
+    required double size,
+    required int count,
+    required double radius,
+  }) {
+    if (playerMarkers.isEmpty || count <= 0) {
+      return const <Widget>[];
+    }
+
+    const colors = <Color>[
+      Color(0xFF1E88E5),
+      Color(0xFFE53935),
+      Color(0xFF43A047),
+      Color(0xFFFB8C00),
+      Color(0xFF8E24AA),
+      Color(0xFF00897B),
+    ];
+
+    final each = 360.0 / count;
+    final ring = radius;
+    final widgets = <Widget>[];
+    for (final marker in playerMarkers) {
+      final sectorIndex = (marker.step % count) + 1;
+      final sequence = (marker.order % 4) + 1;
+      final centerDegree =
+          (rotationDegrees + 2) + each * (sectorIndex - 1) + (sequence - 0.5) * ((each - 4) / 4);
+      final rad = centerDegree * math.pi / 180;
+      final x = ring * math.cos(rad);
+      final y = ring * math.sin(rad);
+      final color = colors[marker.order % colors.length];
+      widgets.add(
+        Positioned(
+          left: size / 2 + x - 10,
+          top: size / 2 + y - 10,
+          child: Tooltip(
+            message: marker.name,
+            child: Container(
+              width: 20,
+              height: 20,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              child: const Icon(Icons.person_rounded, size: 13, color: Colors.white),
+            ),
+          ),
+        ),
+      );
+    }
+    return widgets;
+  }
+
+  List<Widget> _buildOuterSpecialPoints({
+    required double size,
+    required double radius,
+    required int count,
+  }) {
+    final meeting = _meetingPointsForCount(count);
+    final xClue = _xCluePointsForCount(count);
+    final each = 360.0 / count;
+    final widgets = <Widget>[];
+
+    for (final p in meeting) {
+      final degree = each * p + rotationDegrees - 0.1 * (each / 4);
+      final rad = degree * math.pi / 180;
+      final x = radius * math.cos(rad);
+      final y = radius * math.sin(rad);
+      widgets.add(
+        Positioned(
+          left: size / 2 + x - 9,
+          top: size / 2 + y - 9,
+          child: Tooltip(
+            message: 'Conference Point',
+            child: Container(
+              width: 18,
+              height: 18,
+              decoration: const BoxDecoration(color: Colors.lightGreen, shape: BoxShape.circle),
+              child: const Icon(Icons.bookmark, color: Colors.white, size: 12),
+            ),
+          ),
+        ),
+      );
+    }
+
+    for (final p in xClue) {
+      final degree = each * p + rotationDegrees - 0.1 * (each / 4);
+      final rad = degree * math.pi / 180;
+      final x = radius * math.cos(rad);
+      final y = radius * math.sin(rad);
+      widgets.add(
+        Positioned(
+          left: size / 2 + x - 8,
+          top: size / 2 + y - 8,
+          child: Tooltip(
+            message: 'X Clue Point',
+            child: Container(
+              width: 16,
+              height: 16,
+              decoration: const BoxDecoration(color: Colors.blueGrey, shape: BoxShape.circle),
+              child: const Icon(Icons.close, color: Colors.white, size: 10),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return widgets;
+  }
+
+  List<int> _meetingPointsForCount(int count) {
+    if (count == 18) {
+      return const [3, 6, 9, 12, 15, 18];
+    }
+    return const [3, 6, 9, 12];
+  }
+
+  List<int> _xCluePointsForCount(int count) {
+    if (count == 18) {
+      return const [7, 16];
+    }
+    return const [10];
   }
 
   List<Widget> _buildMeetingBackgroundMarkers({
@@ -814,10 +989,16 @@ class _SectorBorderPainter extends CustomPainter {
   const _SectorBorderPainter({
     required this.sectorCount,
     required this.radius,
+    required this.visibleStart,
+    required this.visibleEnd,
+    required this.rotationDegrees,
   });
 
   final int sectorCount;
   final double radius;
+  final int visibleStart;
+  final int visibleEnd;
+  final double rotationDegrees;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -828,18 +1009,43 @@ class _SectorBorderPainter extends CustomPainter {
       ..style = PaintingStyle.stroke;
 
     for (int i = 0; i < sectorCount; i++) {
-      final angle = math.pi * 2 * i / sectorCount;
+      final angle = math.pi * 2 * i / sectorCount + rotationDegrees * math.pi / 180;
       final p2 = Offset(
         center.dx + radius * math.cos(angle),
         center.dy + radius * math.sin(angle),
       );
-      canvas.drawLine(center, p2, borderPaint..color = Colors.blueGrey);
+      final edgeIndex = i + 1;
+      // Legacy semantics: start_index marks the leading boundary, end_index marks the
+      // inclusive end sector, so bold boundary is the next edge after end_index.
+      final endBoundary = visibleEnd % sectorCount;
+      final boldEdge = edgeIndex == visibleStart || i == endBoundary;
+      canvas.drawLine(
+        center,
+        p2,
+        borderPaint
+          ..color = boldEdge ? Colors.black : Colors.blueGrey
+          ..strokeWidth = boldEdge ? 2 : 1,
+      );
     }
     canvas.drawCircle(center, radius, borderPaint..color = Colors.black87);
   }
 
   @override
   bool shouldRepaint(covariant _SectorBorderPainter oldDelegate) {
-    return oldDelegate.sectorCount != sectorCount || oldDelegate.radius != radius;
+    return oldDelegate.sectorCount != sectorCount ||
+        oldDelegate.radius != radius ||
+        oldDelegate.visibleStart != visibleStart ||
+        oldDelegate.visibleEnd != visibleEnd ||
+        oldDelegate.rotationDegrees != rotationDegrees;
   }
+}
+
+bool _visibleSector(int sectorIndex, int visibleStart, int visibleEnd, int max) {
+  if (visibleStart <= 0 || visibleEnd <= 0 || visibleStart > max || visibleEnd > max) {
+    return true;
+  }
+  if (visibleStart > visibleEnd) {
+    return sectorIndex >= visibleStart || sectorIndex <= visibleEnd;
+  }
+  return sectorIndex >= visibleStart && sectorIndex <= visibleEnd;
 }
