@@ -54,15 +54,37 @@ impl PlanetXGame {
         user_id: &str,
         op: &Operation,
     ) -> Result<OperationResult, game::GameError> {
-        let current = state
-            .current_player()
-            .ok_or_else(|| game::GameError::State("planetx_missing_current_player".into()))?;
-        if current != user_id {
-            return Err(game::GameError::Invalid("planetx_not_current_player".into()));
-        }
-
         if !Self::op_allowed_in_stage(&state.game_stage, op) {
             return Err(game::GameError::Invalid("planetx_invalid_move_in_stage".into()));
+        }
+
+        match state.game_stage {
+            PlanetXStage::UserMove | PlanetXStage::LastMove => {
+                let current = state
+                    .current_player()
+                    .ok_or_else(|| game::GameError::State("planetx_missing_current_player".into()))?;
+                if current != user_id {
+                    return Err(game::GameError::Invalid("planetx_not_current_player".into()));
+                }
+            }
+            PlanetXStage::MeetingProposal => {
+                if !state.turn_order.iter().any(|u| u == user_id) {
+                    return Err(game::GameError::Invalid("planetx_not_current_player".into()));
+                }
+                if state.meeting_ready_users.iter().any(|u| u == user_id) {
+                    return Err(game::GameError::Invalid("planetx_not_current_player".into()));
+                }
+            }
+            PlanetXStage::MeetingPublish => {
+                let queue = Self::meeting_publish_queue(state);
+                let Some(expected_user) = queue.first() else {
+                    return Err(game::GameError::Invalid("planetx_invalid_move_in_stage".into()));
+                };
+                if expected_user != user_id {
+                    return Err(game::GameError::Invalid("planetx_not_current_player".into()));
+                }
+            }
+            PlanetXStage::MeetingCheck | PlanetXStage::GameEnd => {}
         }
 
         if matches!(op, Operation::Research(_))
@@ -137,17 +159,20 @@ impl PlanetXGame {
             Operation::ReadyPublish(rp) => {
                 let tokens = state
                     .user_tokens
-                    .get_mut(user_id)
+                    .get(user_id)
                     .ok_or_else(|| game::GameError::State("planetx_user_tokens_missing".into()))?;
-                let mut edited_tokens = tokens.clone();
-                for sector in &rp.sectors {
-                    let token = edited_tokens
+                let mut simulated = tokens.clone();
+                for sector in rp.sectors.iter() {
+                    let token = simulated
                         .iter_mut()
                         .find(|t| t.is_not_used(sector))
                         .ok_or_else(|| game::GameError::Invalid("planetx_token_not_enough".into()))?;
                     token.set_to_be_placed();
                 }
-                *tokens = edited_tokens;
+
+                state
+                    .meeting_pending_publish
+                    .insert(user_id.to_string(), rp.sectors.clone());
                 OperationResult::ReadyPublish(rp.sectors.len())
             }
             Operation::DoPublish(dp) => {
@@ -170,30 +195,32 @@ impl PlanetXGame {
                     .find(|t| t.is_ready_published(&dp.sector_type))
                 {
                     token.set_published(dp.index);
-                } else if let Some(token) = edited_tokens
-                    .iter_mut()
-                    .find(|t| !t.placed && t.r#type == dp.sector_type)
-                {
-                    token.set_to_be_placed().set_published(dp.index);
+                } else if matches!(state.game_stage, PlanetXStage::LastMove) {
+                    if let Some(token) = edited_tokens
+                        .iter_mut()
+                        .find(|t| !t.placed && t.r#type == dp.sector_type)
+                    {
+                        token.set_to_be_placed().set_published(dp.index);
+                    } else {
+                        return Err(game::GameError::Invalid("planetx_token_not_enough".into()));
+                    }
                 } else {
                     return Err(game::GameError::Invalid("planetx_token_not_enough".into()));
                 }
 
-                if !state.revealed_sector_indexes.contains(&dp.index) {
-                    state.revealed_sector_indexes.push(dp.index);
-                }
                 *tokens = edited_tokens;
 
                 OperationResult::DoPublish((dp.index, dp.sector_type.clone()))
             }
         };
 
-        let previous_step = state.player_steps.get(user_id).copied().unwrap_or(0);
+        let min_step_before = Self::min_player_step(state);
         let op_cost = Self::operation_cost(op, state.map_type.sector_count());
         if op_cost > 0 {
             let step = state.player_steps.entry(user_id.to_string()).or_insert(0);
             *step += op_cost;
         }
+        let min_step_after = Self::min_player_step(state);
         state
             .player_results
             .entry(user_id.to_string())
@@ -204,12 +231,10 @@ impl PlanetXGame {
             filter.add_operation(op.clone(), result.clone());
         }
 
-        if matches!(state.game_stage, PlanetXStage::UserMove) {
-            Self::unlock_x_clues_on_pass(state, previous_step, op_cost);
-        }
-
         match state.game_stage {
             PlanetXStage::UserMove => {
+                let progress_points =
+                    Self::crossed_progress_points(min_step_before, min_step_after, state.map_type.sector_count());
                 if Self::should_enter_last_move(&result) {
                     state.game_stage = PlanetXStage::LastMove;
                     state.terminator_step = state.player_steps.get(user_id).copied().unwrap_or(0);
@@ -221,13 +246,18 @@ impl PlanetXGame {
                     } else {
                         Self::finalize_game(state, &map);
                     }
-                } else if Self::is_meeting_triggered(state, previous_step, op_cost) {
+                } else {
+                    Self::unlock_x_clues_on_progress(state, &progress_points);
+                    if let Some(meeting_point) = Self::first_crossed_meeting_point(state, &progress_points) {
                     state.game_stage = PlanetXStage::MeetingProposal;
                     state.meeting_ready_users.clear();
                     state.meeting_published_users.clear();
-                } else {
-                    state.advance_turn();
-                    state.recompute_visible_range();
+                    state.meeting_pending_publish.clear();
+                    Self::set_visible_range_from_anchor(state, meeting_point);
+                    } else {
+                        Self::set_turn_to_trailing_user(state);
+                        state.recompute_visible_range();
+                    }
                 }
             }
             PlanetXStage::LastMove => {
@@ -246,11 +276,17 @@ impl PlanetXGame {
                 }
 
                 if state.meeting_ready_users.len() >= state.turn_order.len() {
+                    Self::materialize_meeting_pending_publish(state)?;
                     state.game_stage = PlanetXStage::MeetingPublish;
                     state.meeting_published_users.clear();
-                    state.turn_index = 0;
-                } else {
-                    state.advance_turn();
+                    let queue = Self::meeting_publish_queue(state);
+                    if let Some(next_uid) = queue.first().cloned() {
+                        if let Some(idx) = state.turn_order.iter().position(|u| u == &next_uid) {
+                            state.turn_index = idx;
+                        }
+                    } else {
+                        Self::complete_meeting_publish_phase(state);
+                    }
                 }
             }
             PlanetXStage::MeetingPublish => {
@@ -258,10 +294,14 @@ impl PlanetXGame {
                     state.meeting_published_users.push(user_id.to_string());
                 }
 
-                if state.meeting_published_users.len() >= state.turn_order.len() {
-                    state.game_stage = PlanetXStage::MeetingCheck;
+                let queue = Self::meeting_publish_queue(state);
+                if queue.is_empty() {
+                    Self::complete_meeting_publish_phase(state);
                 } else {
-                    state.advance_turn();
+                    let next_uid = queue.first().cloned().unwrap_or_default();
+                    if let Some(idx) = state.turn_order.iter().position(|u| u == &next_uid) {
+                        state.turn_index = idx;
+                    }
                 }
             }
             PlanetXStage::MeetingCheck => {
@@ -277,16 +317,59 @@ impl PlanetXGame {
 
     fn resolve_meeting_check_transition(state: &mut PlanetXState, map: &Map) {
         Self::resolve_meeting_checks(state, map);
+        state.game_stage = PlanetXStage::UserMove;
+        state.meeting_ready_users.clear();
+        state.meeting_published_users.clear();
+        state.meeting_pending_publish.clear();
+        Self::set_turn_to_trailing_user(state);
+        state.recompute_visible_range();
+    }
+
+    fn complete_meeting_publish_phase(state: &mut PlanetXState) {
         for tokens in state.user_tokens.values_mut() {
             for token in tokens.iter_mut() {
                 token.push_at_meeting(&state.revealed_sector_indexes);
             }
         }
+
+        if Self::has_ready_checked_tokens(state) {
+            state.game_stage = PlanetXStage::MeetingCheck;
+            return;
+        }
+
         state.game_stage = PlanetXStage::UserMove;
         state.meeting_ready_users.clear();
         state.meeting_published_users.clear();
-        state.advance_turn();
+        state.meeting_pending_publish.clear();
+        Self::set_turn_to_trailing_user(state);
         state.recompute_visible_range();
+    }
+
+    fn has_ready_checked_tokens(state: &PlanetXState) -> bool {
+        state
+            .user_tokens
+            .values()
+            .any(|tokens| tokens.iter().any(|t| t.any_ready_checked()))
+    }
+
+    fn materialize_meeting_pending_publish(state: &mut PlanetXState) -> Result<(), game::GameError> {
+        let pending = state.meeting_pending_publish.clone();
+        for (uid, sectors) in pending {
+            let tokens = state
+                .user_tokens
+                .get_mut(&uid)
+                .ok_or_else(|| game::GameError::State("planetx_user_tokens_missing".into()))?;
+            let mut edited = tokens.clone();
+            for sector in sectors {
+                let token = edited
+                    .iter_mut()
+                    .find(|t| t.is_not_used(&sector))
+                    .ok_or_else(|| game::GameError::Invalid("planetx_token_not_enough".into()))?;
+                token.set_to_be_placed();
+            }
+            *tokens = edited;
+        }
+        Ok(())
     }
 
     fn op_allowed_in_stage(stage: &PlanetXStage, op: &Operation) -> bool {
@@ -320,57 +403,135 @@ impl PlanetXGame {
         }
     }
 
-    fn is_meeting_triggered(state: &PlanetXState, previous_step: usize, op_cost: usize) -> bool {
-        if op_cost == 0 {
-            return false;
+    fn min_player_step(state: &PlanetXState) -> usize {
+        if state.turn_order.is_empty() {
+            return 0;
         }
-        let max = state.map_type.sector_count();
+        state
+            .turn_order
+            .iter()
+            .map(|uid| state.player_steps.get(uid).copied().unwrap_or(0))
+            .min()
+            .unwrap_or(0)
+    }
+
+    fn set_turn_to_trailing_user(state: &mut PlanetXState) {
+        if state.turn_order.is_empty() {
+            state.turn_index = 0;
+            return;
+        }
+
+        let trailing_uid = state
+            .turn_order
+            .iter()
+            .min_by(|a, b| {
+                let sa = state.player_steps.get((*a).as_str()).copied().unwrap_or(0);
+                let sb = state.player_steps.get((*b).as_str()).copied().unwrap_or(0);
+                sa.cmp(&sb).then_with(|| {
+                    let ia = state.turn_order.iter().position(|u| u == *a).unwrap_or(usize::MAX);
+                    let ib = state.turn_order.iter().position(|u| u == *b).unwrap_or(usize::MAX);
+                    ia.cmp(&ib)
+                })
+            })
+            .cloned();
+
+        if let Some(uid) = trailing_uid
+            && let Some(idx) = state.turn_order.iter().position(|u| u == &uid)
+        {
+            state.turn_index = idx;
+        }
+    }
+
+    fn meeting_publish_queue(state: &PlanetXState) -> Vec<String> {
+        let mut queue = state
+            .turn_order
+            .iter()
+            .filter(|uid| {
+                state
+                    .user_tokens
+                    .get((*uid).as_str())
+                    .is_some_and(|tokens| tokens.iter().any(|t| t.any_ready_published()))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        queue.sort_by(|a, b| {
+            let sa = state.player_steps.get(a).copied().unwrap_or(0);
+            let sb = state.player_steps.get(b).copied().unwrap_or(0);
+            sa.cmp(&sb).then_with(|| {
+                let ia = state.turn_order.iter().position(|u| u == a).unwrap_or(usize::MAX);
+                let ib = state.turn_order.iter().position(|u| u == b).unwrap_or(usize::MAX);
+                ia.cmp(&ib)
+            })
+        });
+
+        queue
+    }
+
+    fn first_crossed_meeting_point(
+        state: &PlanetXState,
+        progress_points: &[(usize, usize)],
+    ) -> Option<usize> {
         let meeting_points = state
             .map_type
             .meeting_points()
             .into_iter()
             .map(|(idx, _)| idx)
             .collect::<Vec<_>>();
-        Self::crossed_points(previous_step, op_cost, max)
+        progress_points
             .into_iter()
-            .any(|p| meeting_points.contains(&p))
+            .map(|(_, pos)| *pos)
+            .find(|p| meeting_points.contains(p))
     }
 
-    fn crossed_points(previous_step: usize, delta: usize, max: usize) -> Vec<usize> {
-        if delta == 0 || max == 0 {
+    fn set_visible_range_from_anchor(state: &mut PlanetXState, start_index: usize) {
+        let total = state.map_type.sector_count();
+        let span = total / 2;
+        let start = if start_index == 0 {
+            1
+        } else if start_index > total {
+            ((start_index - 1) % total) + 1
+        } else {
+            start_index
+        };
+        let mut end = start + span - 1;
+        if end > total {
+            end -= total;
+        }
+        state.start_index = start;
+        state.end_index = end;
+    }
+
+    fn crossed_progress_points(
+        previous_step: usize,
+        current_step: usize,
+        max: usize,
+    ) -> Vec<(usize, usize)> {
+        if current_step <= previous_step || max == 0 {
             return vec![];
         }
+        let delta = current_step - previous_step;
         (1..=delta)
             .map(|i| {
                 let abs = previous_step + i;
-                ((abs - 1) % max) + 1
+                let pos = (abs % max) + 1;
+                (abs, pos)
             })
             .collect()
     }
 
-    fn unlock_x_clues_on_pass(state: &mut PlanetXState, previous_step: usize, op_cost: usize) {
-        if op_cost == 0 {
-            return;
-        }
-
-        // Legacy behavior: X clues are unlocked only during the first lap.
+    fn unlock_x_clues_on_progress(state: &mut PlanetXState, progress_points: &[(usize, usize)]) {
         let max = state.map_type.sector_count();
-        if previous_step >= max {
-            return;
-        }
-
         let mut newly_unlocked = Vec::new();
-        for i in 1..=op_cost {
-            let abs = previous_step + i;
-            if abs > max {
+        for (abs, pos) in progress_points {
+            if *abs > max {
                 break;
             }
-            let pos = ((abs - 1) % max) + 1;
             let x_point_index = state
                 .map_type
                 .xclue_points()
                 .iter()
-                .position(|(idx, _)| *idx == pos);
+                .position(|(idx, _)| *idx == *pos);
             let Some(x_idx) = x_point_index else {
                 continue;
             };
@@ -742,9 +903,12 @@ impl Game for PlanetXGame {
         s.end_index = s.map_type.sector_count() / 2;
         s.meeting_ready_users.clear();
         s.meeting_published_users.clear();
+        s.meeting_pending_publish.clear();
         s.last_move_users.clear();
         s.terminator_step = 0;
+        s.action_history.clear();
         s.game_result = None;
+        Self::set_turn_to_trailing_user(s);
         s.recompute_visible_range();
         s.seq += 1;
 
@@ -848,6 +1012,16 @@ impl Game for PlanetXGame {
                 s.seq += 1;
                 s.last_actor = Some(action.user_id.clone());
                 s.last_payload = Some(action.payload.clone());
+                s.action_history.push(json!({
+                    "seq": s.seq,
+                    "actor": action.user_id.clone(),
+                    "op": op,
+                    "result": op_result_json,
+                }));
+                if s.action_history.len() > 240 {
+                    let keep_from = s.action_history.len() - 240;
+                    s.action_history.drain(0..keep_from);
+                }
 
                 let mut broadcasts = vec![Outbound {
                     target: OutboundTarget::User(action.user_id.clone()),
@@ -1029,7 +1203,7 @@ mod tests {
         .expect("alice ready publish should succeed");
         assert!(matches!(r1, OperationResult::ReadyPublish(1)));
         assert_eq!(s.game_stage, PlanetXStage::MeetingProposal);
-        assert_eq!(s.turn_order[s.turn_index], "bob");
+        assert_eq!(s.turn_order[s.turn_index], "alice");
 
         let r2 = PlanetXGame::apply_planetx_operation(
             &mut s,
@@ -1066,13 +1240,156 @@ mod tests {
         )
         .expect("bob do publish should succeed");
         assert!(matches!(r4, OperationResult::DoPublish((2, SectorType::Comet))));
-        assert_eq!(s.game_stage, PlanetXStage::MeetingCheck);
-
-        let map = PlanetXGame::build_runtime_map(&s).expect("map should be available");
-        PlanetXGame::resolve_meeting_check_transition(&mut s, &map);
         assert_eq!(s.game_stage, PlanetXStage::UserMove);
         assert!(s.meeting_ready_users.is_empty());
         assert!(s.meeting_published_users.is_empty());
+    }
+
+    #[test]
+    fn meeting_publish_order_uses_trailing_player_and_allows_multiple_publishes() {
+        let mut s = base_state(&["alice", "bob"]);
+        s.game_stage = PlanetXStage::MeetingProposal;
+        s.player_steps.insert("alice".into(), 6);
+        s.player_steps.insert("bob".into(), 2);
+        s.user_tokens
+            .insert("alice".into(), s.map_type.generate_tokens("alice".into(), 1));
+        s.user_tokens
+            .insert("bob".into(), s.map_type.generate_tokens("bob".into(), 2));
+
+        PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "alice",
+            &Operation::ReadyPublish(ReadyPublishOperation {
+                sectors: vec![SectorType::Comet],
+            }),
+        )
+        .expect("alice ready publish should succeed");
+
+        PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "bob",
+            &Operation::ReadyPublish(ReadyPublishOperation {
+                sectors: vec![SectorType::Comet, SectorType::Comet],
+            }),
+        )
+        .expect("bob ready publish should succeed");
+
+        assert_eq!(s.game_stage, PlanetXStage::MeetingPublish);
+        assert_eq!(s.turn_order[s.turn_index], "bob");
+
+        let blocked = PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "alice",
+            &Operation::DoPublish(DoPublishOperation {
+                index: 1,
+                sector_type: SectorType::Comet,
+            }),
+        );
+        assert!(matches!(
+            blocked,
+            Err(game::GameError::Invalid(msg)) if msg == "planetx_not_current_player"
+        ));
+
+        PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "bob",
+            &Operation::DoPublish(DoPublishOperation {
+                index: 1,
+                sector_type: SectorType::Comet,
+            }),
+        )
+        .expect("bob first publish should succeed");
+        assert_eq!(s.game_stage, PlanetXStage::MeetingPublish);
+        assert_eq!(s.turn_order[s.turn_index], "bob");
+
+        PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "bob",
+            &Operation::DoPublish(DoPublishOperation {
+                index: 2,
+                sector_type: SectorType::Comet,
+            }),
+        )
+        .expect("bob second publish should succeed");
+        assert_eq!(s.game_stage, PlanetXStage::MeetingPublish);
+        assert_eq!(s.turn_order[s.turn_index], "alice");
+
+        PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "alice",
+            &Operation::DoPublish(DoPublishOperation {
+                index: 3,
+                sector_type: SectorType::Comet,
+            }),
+        )
+        .expect("alice publish should succeed");
+        assert_eq!(s.game_stage, PlanetXStage::UserMove);
+    }
+
+    #[test]
+    fn meeting_proposal_keeps_publish_count_secret_until_all_confirmed() {
+        let mut s = base_state(&["alice", "bob"]);
+        s.game_stage = PlanetXStage::MeetingProposal;
+        s.user_tokens
+            .insert("alice".into(), s.map_type.generate_tokens("alice".into(), 1));
+        s.user_tokens
+            .insert("bob".into(), s.map_type.generate_tokens("bob".into(), 2));
+
+        PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "alice",
+            &Operation::ReadyPublish(ReadyPublishOperation {
+                sectors: vec![SectorType::Comet, SectorType::Comet],
+            }),
+        )
+        .expect("alice ready publish should succeed");
+
+        let alice_tokens = s.user_tokens.get("alice").cloned().unwrap_or_default();
+        assert_eq!(s.game_stage, PlanetXStage::MeetingProposal);
+        assert_eq!(
+            alice_tokens.iter().filter(|t| t.placed).count(),
+            0,
+            "before all confirmed, prepared token count should remain hidden"
+        );
+
+        PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "bob",
+            &Operation::ReadyPublish(ReadyPublishOperation {
+                sectors: vec![SectorType::Comet],
+            }),
+        )
+        .expect("bob ready publish should succeed");
+
+        assert_eq!(s.game_stage, PlanetXStage::MeetingPublish);
+        let alice_tokens_after = s.user_tokens.get("alice").cloned().unwrap_or_default();
+        assert_eq!(alice_tokens_after.iter().filter(|t| t.placed).count(), 2);
+    }
+
+    #[test]
+    fn meeting_proposal_accepts_non_current_player_submission() {
+        let mut s = base_state(&["alice", "bob", "carol"]);
+        s.game_stage = PlanetXStage::MeetingProposal;
+        s.turn_index = 0;
+        s.user_tokens
+            .insert("alice".into(), s.map_type.generate_tokens("alice".into(), 1));
+        s.user_tokens
+            .insert("bob".into(), s.map_type.generate_tokens("bob".into(), 2));
+        s.user_tokens
+            .insert("carol".into(), s.map_type.generate_tokens("carol".into(), 3));
+
+        let r = PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "bob",
+            &Operation::ReadyPublish(ReadyPublishOperation {
+                sectors: vec![SectorType::Comet],
+            }),
+        )
+        .expect("non-current player should be able to submit in meeting proposal");
+
+        assert!(matches!(r, OperationResult::ReadyPublish(1)));
+        assert_eq!(s.game_stage, PlanetXStage::MeetingProposal);
+        assert!(s.meeting_ready_users.iter().any(|u| u == "bob"));
     }
 
     #[test]
@@ -1127,8 +1444,30 @@ mod tests {
     #[test]
     fn crossing_meeting_point_triggers_meeting() {
         let mut s = base_state(&["alice", "bob"]);
+        s.player_steps.insert("alice".into(), 6);
+        s.player_steps.insert("bob".into(), 2);
+        s.turn_index = 1;
+
+        PlanetXGame::apply_planetx_operation(
+            &mut s,
+            "bob",
+            &Operation::Target(TargetOperation { index: 1 }),
+        )
+        .expect("target should succeed");
+
+        assert_eq!(s.game_stage, PlanetXStage::MeetingProposal);
+        assert_eq!(s.start_index, 6);
+        assert_eq!(s.end_index, 11);
+        assert!(s.meeting_ready_users.is_empty());
+        assert!(s.meeting_published_users.is_empty());
+    }
+
+    #[test]
+    fn single_player_crossing_meeting_point_does_not_trigger_meeting() {
+        let mut s = base_state(&["alice", "bob"]);
         s.player_steps.insert("alice".into(), 2);
         s.player_steps.insert("bob".into(), 0);
+        s.turn_index = 0;
 
         PlanetXGame::apply_planetx_operation(
             &mut s,
@@ -1137,9 +1476,10 @@ mod tests {
         )
         .expect("target should succeed");
 
-        assert_eq!(s.game_stage, PlanetXStage::MeetingProposal);
+        assert_eq!(s.game_stage, PlanetXStage::UserMove);
         assert!(s.meeting_ready_users.is_empty());
         assert!(s.meeting_published_users.is_empty());
+        assert_eq!(s.turn_order[s.turn_index], "bob");
     }
 
     #[test]
@@ -1152,7 +1492,7 @@ mod tests {
             conn: ClueConnection::NotAdjacent,
         }];
         s.player_steps.insert("alice".into(), 8);
-        s.player_steps.insert("bob".into(), 1);
+        s.player_steps.insert("bob".into(), 9);
 
         PlanetXGame::apply_planetx_operation(
             &mut s,
@@ -1187,8 +1527,8 @@ mod tests {
             object: SectorType::Asteroid,
             conn: ClueConnection::NotAdjacent,
         }];
-        s.player_steps.insert("alice".into(), 9);
-        s.player_steps.insert("bob".into(), 1);
+        s.player_steps.insert("alice".into(), 8);
+        s.player_steps.insert("bob".into(), 10);
 
         PlanetXGame::apply_planetx_operation(
             &mut s,
@@ -1203,7 +1543,7 @@ mod tests {
 
         let res = PlanetXGame::apply_planetx_operation(
             &mut s,
-            "bob",
+            "alice",
             &Operation::Research(ResearchOperation { index: ClueEnum::A }),
         )
         .expect("manual research should still be allowed after x clue unlock");

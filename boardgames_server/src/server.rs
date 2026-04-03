@@ -510,6 +510,7 @@ async fn socket_on_join_room(
                         "broadcast",
                         &serde_json::json!({
                             "type": "state",
+                            "game": current.game_id,
                             "state": snapshot_value,
                             "event": "rejoin_sync",
                             "room": req.room,

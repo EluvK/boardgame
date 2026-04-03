@@ -14,6 +14,20 @@ class PlanetXPlayerMarker {
   final int order;
 }
 
+class PlanetXPublicTokenMarker {
+  const PlanetXPublicTokenMarker({
+    required this.sectorIndex,
+    required this.meetingIndex,
+    required this.userIndex,
+    this.revealedType,
+  });
+
+  final int sectorIndex;
+  final int meetingIndex;
+  final int userIndex;
+  final String? revealedType;
+}
+
 class PlanetXStarMap extends StatelessWidget {
   const PlanetXStarMap({
     super.key,
@@ -40,6 +54,8 @@ class PlanetXStarMap extends StatelessWidget {
     required this.sectorMarks,
     required this.tokensCount,
     required this.othersCount,
+    required this.ownTokenCounts,
+    required this.publicTokenMarkers,
     required this.rotationDegrees,
     required this.onRotateCenter,
   });
@@ -69,6 +85,8 @@ class PlanetXStarMap extends StatelessWidget {
 
   final int tokensCount;
   final int othersCount;
+  final Map<String, int> ownTokenCounts;
+  final List<PlanetXPublicTokenMarker> publicTokenMarkers;
   final double rotationDegrees;
   final VoidCallback onRotateCenter;
 
@@ -133,6 +151,12 @@ class PlanetXStarMap extends StatelessWidget {
               left: 8,
               top: 10,
               child: _counterChip(context, 'Others', othersCount),
+            ),
+          if (showMeetingView)
+            Positioned(
+              right: 8,
+              top: 10,
+              child: _tokenCountChip(context),
             ),
           Positioned(
             left: 8,
@@ -456,6 +480,12 @@ class PlanetXStarMap extends StatelessWidget {
                   radius: radius,
                   baseRadius: 36,
                 ),
+                ..._buildMeetingPublicTokenMarkers(
+                  size: size,
+                  sectorCount: displaySectors.length,
+                  radius: radius,
+                  baseRadius: 36,
+                ),
                 ..._buildMeetingTokenDots(
                   size: size,
                   count: tokensCount,
@@ -714,6 +744,86 @@ class PlanetXStarMap extends StatelessWidget {
     return widgets;
   }
 
+  List<Widget> _buildMeetingPublicTokenMarkers({
+    required double size,
+    required int sectorCount,
+    required double radius,
+    required double baseRadius,
+  }) {
+    if (publicTokenMarkers.isEmpty || sectorCount <= 0) {
+      return const <Widget>[];
+    }
+
+    final each = 360.0 / sectorCount;
+    final widgets = <Widget>[];
+    final ownerPalette = <Color>[
+      const Color(0xFF1E88E5),
+      const Color(0xFFE53935),
+      const Color(0xFF43A047),
+      const Color(0xFFFB8C00),
+      const Color(0xFF8E24AA),
+      const Color(0xFF00897B),
+    ];
+
+    for (final token in publicTokenMarkers) {
+      if (token.sectorIndex <= 0 || token.sectorIndex > sectorCount) {
+        continue;
+      }
+      if (token.meetingIndex >= 4) {
+        continue;
+      }
+
+      final ringRadius = switch (token.meetingIndex) {
+        0 => baseRadius - 6,
+        1 => baseRadius + (radius - baseRadius) * 1 / 4.6,
+        2 => baseRadius + (radius - baseRadius) * 2 / 4.6,
+        _ => baseRadius + (radius - baseRadius) * 3 / 4.6,
+      };
+
+      final ownerOffset = ((token.userIndex % 5) - 2) * (each / 22.0);
+      final centerDegree = each * (token.sectorIndex - 1) + each / 2 + rotationDegrees + ownerOffset;
+      final radians = centerDegree * math.pi / 180;
+      final x = ringRadius * math.cos(radians);
+      final y = ringRadius * math.sin(radians);
+      final color = ownerPalette[(token.userIndex - 1).abs() % ownerPalette.length];
+
+      final revealed = token.revealedType != null && token.revealedType!.isNotEmpty;
+      widgets.add(
+        Positioned(
+          left: size / 2 + x - 8,
+          top: size / 2 + y - 8,
+          child: Tooltip(
+            message: revealed
+                ? 'Revealed ${_sectorShortLabel(token.revealedType!)}'
+                : 'Hidden token',
+            child: Container(
+              width: 16,
+              height: 16,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: color.withAlpha(210),
+                border: Border.all(color: Colors.white, width: 1),
+              ),
+              alignment: Alignment.center,
+              child: revealed
+                  ? Padding(
+                      padding: const EdgeInsets.all(2),
+                      child: Image.asset(
+                        _sectorAssetPath(_normalizeSectorType(token.revealedType!)),
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+                      ),
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return widgets;
+  }
+
   Widget _counterChip(BuildContext context, String label, int value) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -722,6 +832,61 @@ class PlanetXStarMap extends StatelessWidget {
         borderRadius: BorderRadius.circular(10),
       ),
       child: Text('$label: $value', style: const TextStyle(fontSize: 12)),
+    );
+  }
+
+  Widget _tokenCountChip(BuildContext context) {
+    const order = <String>['comet', 'asteroid', 'dwarf_planet', 'nebula'];
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 200),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('My Tokens', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 2),
+          SizedBox(
+            width: 180,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                for (final ty in order)
+                  _tokenCountCell(
+                    type: ty,
+                    count: ownTokenCounts[ty] ?? 0,
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tokenCountCell({required String type, required int count}) {
+    return SizedBox(
+      width: 80,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: Image.asset(
+              _sectorAssetPath(type),
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text('x$count', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+        ],
+      ),
     );
   }
 

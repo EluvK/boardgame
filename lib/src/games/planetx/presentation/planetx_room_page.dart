@@ -158,6 +158,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
       _roomStarted = _latestState?.state['started'] == true;
       _ensureMarkBuffer();
       _syncClueDataFromState(_latestState?.state ?? const <String, dynamic>{}, widget.session.userId);
+      _hydrateLogsFromHistory(_latestState?.state ?? const <String, dynamic>{}, _latestState?.event ?? '');
       _appendOpFromState(payload, _latestState?.state ?? const <String, dynamic>{});
       _latestHint = _latestState?.event ?? '';
       _appendLimited(
@@ -192,10 +193,24 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     final actor = stateMap['last_actor']?.toString() ?? '';
     final lastPayload = _asMap(stateMap['last_payload']);
     final op = _asMap(lastPayload['op']);
-    final summary = _summarizeOperationRequest(op);
+    final isSelf = actor == widget.session.userId;
+    final containsReadyPublish = op.containsKey('ready_publish');
+    final containsDoPublish = op.containsKey('do_publish');
+    final isSensitiveMeetingOp = containsReadyPublish || containsDoPublish;
+
+    final summary = (!isSelf && isSensitiveMeetingOp)
+        ? (containsDoPublish ? 'do_publish (hidden)' : 'ready_publish (hidden)')
+        : _summarizeOperationRequest(op);
     if (summary.isEmpty) {
       return;
     }
+
+    final rawForLog = (!isSelf && isSensitiveMeetingOp)
+        ? jsonEncode({
+            'hidden': true,
+            'type': containsDoPublish ? 'do_publish' : 'ready_publish',
+          })
+        : jsonEncode(op);
 
     _appendLimited(
       _opLog,
@@ -204,7 +219,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
         type: 'op',
         actor: actor,
         summary: summary,
-        raw: jsonEncode(op),
+        raw: rawForLog,
         category: actor == widget.session.userId ? 'self_op' : 'other_op',
       ),
     );
@@ -217,9 +232,93 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
           type: 'conference',
           actor: actor,
           summary: summary,
-          raw: jsonEncode(op),
+          raw: rawForLog,
         ),
       );
+    }
+  }
+
+  void _hydrateLogsFromHistory(Map<String, dynamic> stateMap, String event) {
+    if (!(event == 'rejoin_sync' || event == 'sync')) {
+      return;
+    }
+
+    final rawHistory = stateMap['action_history'];
+    if (rawHistory is! List) {
+      return;
+    }
+
+    _opLog.clear();
+    _meetingLog.clear();
+
+    for (final raw in rawHistory) {
+      if (raw is! Map) {
+        continue;
+      }
+      final item = _asMap(raw);
+      final actor = item['actor']?.toString() ?? '';
+      final op = _asMap(item['op']);
+      final result = _asMap(item['result']);
+
+      final isSelf = actor == widget.session.userId;
+      final containsReadyPublish = op.containsKey('ready_publish');
+      final containsDoPublish = op.containsKey('do_publish');
+      final isSensitiveMeetingOp = containsReadyPublish || containsDoPublish;
+
+      final summary = (!isSelf && isSensitiveMeetingOp)
+          ? (containsDoPublish ? 'do_publish (hidden)' : 'ready_publish (hidden)')
+          : _summarizeOperationRequest(op);
+      if (summary.isNotEmpty) {
+        _appendLimited(
+          _opLog,
+          PlanetXLogEntry(
+            time: DateTime.now(),
+            type: 'op',
+            actor: actor,
+            summary: summary,
+            raw: (!isSelf && isSensitiveMeetingOp)
+                ? jsonEncode({
+                    'hidden': true,
+                    'type': containsDoPublish ? 'do_publish' : 'ready_publish',
+                  })
+                : jsonEncode(op),
+            category: isSelf ? 'self_op' : 'other_op',
+          ),
+        );
+      }
+
+      final resultSummary = _summarizeOperationResult(result);
+      if (isSelf && resultSummary.isNotEmpty) {
+        _appendLimited(
+          _opLog,
+          PlanetXLogEntry(
+            time: DateTime.now(),
+            type: 'op',
+            actor: actor,
+            summary: resultSummary,
+            raw: jsonEncode(result),
+            category: 'self_result',
+          ),
+        );
+      }
+
+      if (containsReadyPublish || containsDoPublish) {
+        _appendLimited(
+          _meetingLog,
+          PlanetXLogEntry(
+            time: DateTime.now(),
+            type: 'conference',
+            actor: actor,
+            summary: summary.isEmpty ? 'meeting' : summary,
+            raw: (!isSelf && isSensitiveMeetingOp)
+                ? jsonEncode({
+                    'hidden': true,
+                    'type': containsDoPublish ? 'do_publish' : 'ready_publish',
+                  })
+                : jsonEncode(op),
+          ),
+        );
+      }
     }
   }
 
@@ -475,10 +574,14 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     final revealedIndexes = _revealedIndexes(stateMap);
     final publishableTypes = _publishableTypes(stateMap);
     final pendingPublishTypes = _pendingPublishTypes(stateMap, widget.session.userId);
+    final meetingReadyUsers = _asStringList(stateMap['meeting_ready_users']);
+    final meetingProposalSubmitted = meetingReadyUsers.contains(widget.session.userId);
     final availableSectorTypes = _availableSectorTypes(sectors, publishableTypes);
     final currentPlayerName = _playerDisplayName(currentPlayer);
     final playerNames = players.map(_playerDisplayName).toList();
     final playerMarkers = _playerMarkers(stateMap);
+    final ownTokenCounts = _ownTokenCounts(stateMap);
+    final publicTokenMarkers = _publicTokenMarkers(stateMap);
     final stageHint = _buildStageHint(gameStage, currentPlayerName);
     final selfName = _playerDisplayName(widget.session.userId);
 
@@ -605,6 +708,7 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
                   ),
                   'do_publish',
                 ),
+                meetingProposalSubmitted: meetingProposalSubmitted,
               ),
             ),
             LayoutBuilder(
@@ -662,6 +766,8 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
                     sectorMarks: _sectorMarks,
                     tokensCount: _countTokensInState(),
                     othersCount: _countOthersInState(),
+                    ownTokenCounts: ownTokenCounts,
+                    publicTokenMarkers: publicTokenMarkers,
                   ),
                 );
                 final logsPanel = PlanetXLogsPanel(
@@ -819,6 +925,72 @@ class _PlanetXRoomPageState extends State<PlanetXRoomPage> {
     final stateMap = _latestState?.state ?? <String, dynamic>{};
     final players = _asStringList(stateMap['players']);
     return players.length > 1 ? players.length - 1 : 0;
+  }
+
+  Map<String, int> _ownTokenCounts(Map<String, dynamic> stateMap) {
+    final userTokensById = _asMap(stateMap['user_tokens']);
+    final raw = userTokensById[widget.session.userId];
+    if (raw is! List) {
+      return const <String, int>{};
+    }
+
+    final counts = <String, int>{};
+    for (final item in raw) {
+      if (item is! Map) {
+        continue;
+      }
+      final token = _asMap(item);
+      if (token['placed'] == true) {
+        continue;
+      }
+      final ty = token['type']?.toString();
+      if (ty == null || ty.isEmpty) {
+        continue;
+      }
+      counts[ty] = (counts[ty] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  List<PlanetXPublicTokenMarker> _publicTokenMarkers(Map<String, dynamic> stateMap) {
+    final userTokensById = _asMap(stateMap['user_tokens']);
+    final result = <PlanetXPublicTokenMarker>[];
+
+    for (final entry in userTokensById.entries) {
+      final rawTokens = entry.value;
+      if (rawTokens is! List) {
+        continue;
+      }
+      for (final item in rawTokens) {
+        if (item is! Map) {
+          continue;
+        }
+        final token = _asMap(item);
+        if (token['placed'] != true) {
+          continue;
+        }
+        final secret = _asMap(token['secret']);
+        final sectorIndex = _asInt(secret['sector_index']);
+        final meetingIndex = _asInt(secret['meeting_index']);
+        final userIndex = _asInt(secret['user_index']);
+        final revealedType = secret['type']?.toString();
+
+        if (sectorIndex <= 0 || userIndex <= 0) {
+          continue;
+        }
+
+        result.add(
+          PlanetXPublicTokenMarker(
+            sectorIndex: sectorIndex,
+            meetingIndex: meetingIndex,
+            userIndex: userIndex,
+            revealedType: revealedType,
+          ),
+        );
+      }
+    }
+
+    return result;
   }
 
   void _appendLimited(List<PlanetXLogEntry> target, PlanetXLogEntry value) {

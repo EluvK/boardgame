@@ -36,6 +36,7 @@ class PlanetXOpBar extends StatelessWidget {
     required this.onLocate,
     required this.onReadyPublish,
     required this.onDoPublish,
+    required this.meetingProposalSubmitted,
   });
 
   final bool busy;
@@ -62,6 +63,7 @@ class PlanetXOpBar extends StatelessWidget {
   final void Function(int index, String pre, String next) onLocate;
   final void Function(List<String> sectors) onReadyPublish;
   final void Function(int index, String sectorType) onDoPublish;
+  final bool meetingProposalSubmitted;
 
   @override
   Widget build(BuildContext context) {
@@ -90,6 +92,7 @@ class PlanetXOpBar extends StatelessWidget {
       onLocate: onLocate,
       onReadyPublish: onReadyPublish,
       onDoPublish: onDoPublish,
+      meetingProposalSubmitted: meetingProposalSubmitted,
     );
   }
 }
@@ -120,6 +123,7 @@ class _PlanetXOpBarForm extends StatefulWidget {
     required this.onLocate,
     required this.onReadyPublish,
     required this.onDoPublish,
+    required this.meetingProposalSubmitted,
   });
 
   final bool busy;
@@ -146,6 +150,7 @@ class _PlanetXOpBarForm extends StatefulWidget {
   final void Function(int index, String pre, String next) onLocate;
   final void Function(List<String> sectors) onReadyPublish;
   final void Function(int index, String sectorType) onDoPublish;
+  final bool meetingProposalSubmitted;
 
   @override
   State<_PlanetXOpBarForm> createState() => _PlanetXOpBarFormState();
@@ -195,7 +200,10 @@ class _PlanetXOpBarFormState extends State<_PlanetXOpBarForm> {
     final opTypes = widget.sectorTypes.where((s) => s != 'x' && s != 'space').toList();
     final publishTypes = widget.publishableTypes.isEmpty ? opTypes : widget.publishableTypes;
     final isMyTurn = widget.currentPlayerId.isNotEmpty && widget.currentPlayerId == widget.currentUserId;
-    final availableOps = widget.roomStarted && isMyTurn ? _opsByStage(widget.gameStage) : const <PlanetXOpKind>[];
+    final canActByStage = widget.gameStage == 'meeting_proposal'
+      ? !widget.meetingProposalSubmitted
+      : isMyTurn;
+    final availableOps = widget.roomStarted && canActByStage ? _opsByStage(widget.gameStage) : const <PlanetXOpKind>[];
     final surveyStart = _normalizeIndex(widget.visibleStart, widget.mapSize);
     final surveyEnd = _normalizeIndex(widget.visibleEnd, widget.mapSize);
     final canTarget = widget.targetUsedCount < 2;
@@ -230,9 +238,13 @@ class _PlanetXOpBarFormState extends State<_PlanetXOpBarForm> {
           child: Text(
             !widget.roomStarted
                 ? 'Game not started'
+              : widget.gameStage == 'meeting_proposal'
+                ? (widget.meetingProposalSubmitted
+                  ? 'Proposal submitted, waiting others'
+                  : 'Meeting proposal: submit your hidden tokens')
                 : (isMyTurn
-                    ? 'Your turn'
-                    : 'Waiting: ${widget.currentPlayerName.isEmpty ? '-' : widget.currentPlayerName}'),
+                  ? 'Your turn'
+                  : 'Waiting: ${widget.currentPlayerName.isEmpty ? '-' : widget.currentPlayerName}'),
             style: const TextStyle(fontSize: 12, color: Colors.black54),
           ),
         ),

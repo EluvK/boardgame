@@ -169,11 +169,13 @@ class PlanetXMeetingLogTable extends StatelessWidget {
       title: 'MeetingLog',
       table: Table(
         border: TableBorder.all(),
+        columnWidths: const {0: FixedColumnWidth(44), 1: FlexColumnWidth(4)},
         children: [
-          _headerRow(const ['meeting']),
+          _headerRow(const ['event', 'meeting']),
           for (final row in rows.take(12))
             TableRow(
               children: [
+                _tableCell(_meetingEventIcon(row.summary)),
                 _tableCell(_tapText(context, row, prefixTime: true)),
               ],
             ),
@@ -181,6 +183,17 @@ class PlanetXMeetingLogTable extends StatelessWidget {
       ),
     );
   }
+}
+
+Widget _meetingEventIcon(String summary) {
+  final lower = summary.toLowerCase();
+  if (lower.contains('ready_publish')) {
+    return const Icon(Icons.playlist_add_check_circle_rounded, size: 16, color: Colors.blueGrey);
+  }
+  if (lower.contains('do_publish')) {
+    return const Icon(Icons.publish_rounded, size: 16, color: Colors.indigo);
+  }
+  return const Icon(Icons.event_note_rounded, size: 16, color: Colors.grey);
 }
 
 Widget _panel({

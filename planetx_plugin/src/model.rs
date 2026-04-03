@@ -45,7 +45,11 @@ pub struct PlanetXState {
     pub player_steps: HashMap<String, usize>,
     pub player_target_uses: HashMap<String, usize>,
     pub user_tokens: HashMap<String, Vec<Token>>,
+    #[serde(skip, default)]
+    pub meeting_pending_publish: HashMap<String, Vec<SectorType>>,
     pub revealed_sector_indexes: Vec<usize>,
+    #[serde(default)]
+    pub action_history: Vec<Value>,
     #[serde(default)]
     pub game_result: Option<Vec<UserResultSummary>>,
     #[serde(skip, default)]
@@ -79,7 +83,9 @@ impl PlanetXState {
             player_steps: HashMap::new(),
             player_target_uses: HashMap::new(),
             user_tokens: HashMap::new(),
+            meeting_pending_publish: HashMap::new(),
             revealed_sector_indexes: vec![],
+            action_history: vec![],
             game_result: None,
             choice_filters: HashMap::new(),
             player_results: HashMap::new(),
